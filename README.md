@@ -2,6 +2,8 @@
 
 Official Repository of the [ICLR 2024 paper](https://openreview.net/forum?id=h7nOCxFsPg) _"Tractable Probabilistic Graph Representation Learning with Graph-Induced Sum-Product Networks"_.
 
+![GSPN](gspn.png)
+
 ### Citing us
 
 Please consider citing us if you find the code and paper useful:
