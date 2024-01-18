@@ -9,7 +9,7 @@ Please consider citing us if you find the code and paper useful:
     @inproceedings{errica_tractable_2024,
       title={Tractable Probabilistic Graph Representation Learning with Graph-Induced Sum-Product Networks},
       author={Errica, Federico and Niepert, Mathias},
-      booktitle={The Twelfth International Conference on Learning Representations},
+      booktitle={The 12th International Conference on Learning Representations (ICLR)},
       year={2024},
     }
 
