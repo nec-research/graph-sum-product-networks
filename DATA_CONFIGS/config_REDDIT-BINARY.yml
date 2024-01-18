@@ -1,0 +1,22 @@
+splitter:
+  root: DATA_SPLITS/COLLABORATIVE_DEGREE
+  class_name: pydgn.data.splitter.Splitter
+  args:
+    n_outer_folds: 10
+    n_inner_folds: 1
+    seed: 42
+    stratify: True  # works for graph classification tasks
+    shuffle: True
+    inner_val_ratio: 0.1
+    outer_val_ratio: 0.1
+    test_ratio: 0.1
+dataset:
+  root: DATA
+  class_name: pydgn.data.dataset.TUDatasetInterface
+  args:
+    root: DATA
+    name: REDDIT-BINARY
+  transform:
+    - class_name: pydgn.data.transform.Degree
+      args:
+        in_degree: True  # does not make a difference with undirected graphs

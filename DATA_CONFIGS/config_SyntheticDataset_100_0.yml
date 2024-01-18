@@ -1,0 +1,26 @@
+splitter:
+  root: DATA_SPLITS/
+  class_name: pydgn.data.splitter.Splitter
+  args:
+    n_outer_folds: 1
+    n_inner_folds: 1
+    seed: 42
+    stratify: False  # works for graph classification tasks
+    shuffle: True
+    inner_val_ratio: 0.1
+    outer_val_ratio: 0.1
+    test_ratio: 0.1
+dataset:
+  root: DATA
+  class_name: dataset.SyntheticDataset
+  args:
+    root: DATA
+    name: SyntheticDataset
+    raw_dir: GENERATED_DATA/missing_data/Synthetic_100_0
+    per_community_weight: 100  # percentage
+    structure_weight: 0  # percentage
+  pre_transform:
+    - class_name: transform.GammaRandomNodeFeaturesMask
+      args:
+        alpha: 1.5
+        beta: 2

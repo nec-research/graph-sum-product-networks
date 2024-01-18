@@ -1,0 +1,24 @@
+splitter:
+  root: DATA_SPLITS/CHEMICAL
+  class_name: pydgn.data.splitter.Splitter
+  args:
+    n_outer_folds: 1
+    n_inner_folds: 1
+    seed: 42
+    stratify: False
+    shuffle: True
+    inner_val_ratio: 0.1
+    outer_val_ratio: 0.1
+    test_ratio: 0.1
+dataset:
+  root: DATA/missing_data/
+  class_name: dataset.TUDatasetInterfaceMissingData
+  args:
+    root: DATA/missing_data/
+    name: uracil
+  pre_transform:
+    - class_name: transform.ContinuousAttributesTUDatasetChemical
+    - class_name: transform.GammaRandomNodeFeaturesMask
+      args:
+        alpha: 1.5
+        beta: 2
