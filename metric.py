@@ -193,7 +193,7 @@ class GSPNNodeLogLikelihood(Metric):
             # assert not torch.any(torch.isnan(-log_likelihood/num_non_masked_features))
             return (-log_likelihood/num_non_masked_features).mean()
         else:
-            print(log_likelihood.shape, log_likelihood.mean().item())
+            # print(log_likelihood.shape, log_likelihood.mean().item())
             return -log_likelihood.mean()
 
 

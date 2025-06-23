@@ -35,7 +35,7 @@ final_training_runs: 3
 
 grid:
   supervised_config:
-    model: model_log.GSPN
+    model: model.GSPN
     checkpoint: True
     shuffle: True
     batch_size: 32
@@ -46,8 +46,8 @@ grid:
 
     embeddings_folder: 'UNSUP_GSPN_EMBEDDINGS_BASIC/'
 
-    convolution_class: model_log.GSPNBaseConv
-    emission_class: model_log.GSPNGaussianEmission
+    convolution_class: model.GSPNBaseConv
+    emission_class: model.GSPNGaussianEmission
 
     num_layers:
       - 1
@@ -89,7 +89,6 @@ grid:
       - class_name: pydgn.training.callback.metric.MultiScore
         args:
           main_scorer: metric.GSPNNodeLogLikelihood
-          mse: metric.MissingFeaturesMSE
           imputationlikelihood: metric.ConditionalMeanImputationLikelihood
 
     # Readout (optional)

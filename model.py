@@ -145,6 +145,7 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+from shutil import make_archive
 from typing import Tuple, Optional, List
 
 import torch
@@ -254,12 +255,13 @@ class GSPNEmission(nn.Module):
         return NotImplementedError("You should use a subclass of GSPNEmission")
 
     @staticmethod
-    def log_likelihood(x, mixture_weights, parameters):
+    def log_likelihood(x, mixture_weights, parameters, masked_nodes=None):
         """
         Computes the log-likelihood for a vector of N samples associated with the mixture of Categoricals
         :param x: vector of N categories, one per sample (i.e., node)
         :param mixture_weights:
         :param parameters: vector of normalized probabilities for the categorical distribution
+        :param masked_nodes: boolean matrix (N,F) containing the features to be retained (as 1) for each node 
         :return: log_likelihood vector of size N and a log_likelihood matrix of size N x num_components
         """
         return NotImplementedError("You should use a subclass of GSPNEmission")
@@ -276,10 +278,11 @@ class GSPNEmission(nn.Module):
         self.num_mixtures = num_mixtures
         self.num_hidden_neurons = num_hidden_neurons
 
-    def forward(self, x, mixture_weights):
+    def forward(self, x, mixture_weights, masked_nodes=None):
         """
         :param x:
         :param mixture_weights:
+        :param masked_nodes: boolean matrix (N,F) containing the features to be retained (as 1) for each node 
         :return: the per-vertex emission parameters and the per-vertex log-likelihood scores
         """
         return NotImplementedError("You should use a subclass of GSPNEmission")
@@ -292,7 +295,7 @@ class GSPNCategoricalEmission(GSPNEmission):
         return stacked_average_params_v.mean(dim=1)
 
     @staticmethod
-    def log_likelihood(x, mixture_weights, parameters):
+    def log_likelihood(x, mixture_weights, parameters, masked_nodes=None):
         assert len(x.shape) == 1 or (len(x.shape) == 2), x.shape
         if len(x.shape) == 2:
             # remove second dimension to flatten Nx1 vector)
@@ -302,9 +305,27 @@ class GSPNCategoricalEmission(GSPNEmission):
         comp = Categorical(probs=parameters)
         mm = MixtureSameFamily(mix, comp)
 
-        return mm.log_prob(x), comp.log_prob(
-            x.unsqueeze(1)
-        )  # todo a bit redundant but clearer for now
+        if masked_nodes is not None:
+            raise NotImplementedError("Not implemented!")
+            # x[masked_nodes] = 0.  # just to make sure it's something computable
+            
+            # if mm._validate_args:
+            #     mm._validate_sample(x)
+            # x = mm._pad(x)
+            # comp_log_prob_x = comp..base_dist.log_prob(x)  # [Samples, Components, Features]
+            
+            # # Since the features are independent, I will sum in log space alond the last dimension. 
+            # # To make the gradient 0, multiply by 0 the masked features
+            # masked_nodes_unsqueezed = masked_nodes.unsqueeze(1).repeat(1, comp_log_prob_x.shape[1], 1)
+            # comp_log_prob_x[masked_nodes_unsqueezed] = comp_log_prob_x[masked_nodes_unsqueezed]*0
+
+            # comp_log_prob_x = comp_log_prob_x.sum(dim=2)
+            # log_prob = torch.logsumexp(comp_log_prob_x + mixture_weights.log(), dim=-1)  # [Samples, Components]
+            # return log_prob, comp_log_prob_x
+        else:
+            return mm.log_prob(x), comp.log_prob(
+                x.unsqueeze(1)
+            )  # todo a bit redundant but clearer for now
 
     def __init__(self, dim_observable, num_mixtures, num_hidden_neurons):
         super().__init__(dim_observable, num_mixtures, num_hidden_neurons)
@@ -314,7 +335,7 @@ class GSPNCategoricalEmission(GSPNEmission):
 
 
 
-    def forward(self, x, mixture_weights):
+    def forward(self, x, mixture_weights, masked_nodes=None):
         categorical_probs = exp_normalize_trick(self.categorical_probs.unsqueeze(0), dim=2)
 
         imputed_probs = self.impute(categorical_probs, mixture_weights)
@@ -322,7 +343,7 @@ class GSPNCategoricalEmission(GSPNEmission):
         (
             per_vertex_log_likelihood,
             per_vertex_log_likelihood_components,
-        ) = self.log_likelihood(x, mixture_weights, categorical_probs)
+        ) = self.log_likelihood(x, mixture_weights, categorical_probs, masked_nodes)
 
         return (
             categorical_probs,
@@ -346,7 +367,7 @@ class GSPNMultiCategoricalEmission(GSPNEmission):
         stacked_average_params_v = torch.stack(parameters_per_layer, dim=1)
         return stacked_average_params_v.mean(dim=1)
 
-    def log_likelihood(self, x, mixture_weights, parameters):
+    def log_likelihood(self, x, mixture_weights, parameters, masked_nodes=None):
         assert len(x.shape) == 2, x.shape
 
         log_prob = 0.
@@ -359,7 +380,7 @@ class GSPNMultiCategoricalEmission(GSPNEmission):
             params = parameters[:, params_start:params_start+self.dim_categorical_features[i]]
             params_start += self.dim_categorical_features[i]
 
-            e_log_prob, e_comp_log_prob_x = e.log_likelihood(x[:,i], mixture_weights.log(), params)
+            e_log_prob, e_comp_log_prob_x = e.log_likelihood(x[:,i], mixture_weights.log(), params, masked_nodes)
             log_prob = log_prob + e_log_prob
             comp_log_prob_x = comp_log_prob_x + e_comp_log_prob_x
 
@@ -379,7 +400,7 @@ class GSPNMultiCategoricalEmission(GSPNEmission):
         per_vertex_log_likelihood_components = 0.
 
         for i,e in enumerate(self.emissions):
-            e_params, e_per_vertex_log_likelihood, e_per_vertex_log_likelihood_components, _ = e.forward(x[:,i], mixture_weights)
+            e_params, e_per_vertex_log_likelihood, e_per_vertex_log_likelihood_components, _ = e.forward(x[:,i], mixture_weights, masked_nodes)
             params.append(e_params)
             per_vertex_log_likelihood = per_vertex_log_likelihood + e_per_vertex_log_likelihood
             per_vertex_log_likelihood_components = per_vertex_log_likelihood_components + e_per_vertex_log_likelihood_components
@@ -411,7 +432,7 @@ class GSPNGaussianEmission(GSPNEmission):
         return stacked_average_params_v.mean(dim=1)
 
     @staticmethod
-    def log_likelihood(x, mixture_weights, parameters):
+    def log_likelihood(x, mixture_weights, parameters, masked_nodes=None):
         assert len(x.shape) == 2, x.shape
 
         mix = Categorical(probs=mixture_weights)
@@ -420,9 +441,26 @@ class GSPNGaussianEmission(GSPNEmission):
         )
         mm = MixtureSameFamily(mix, comp)
 
-        return mm.log_prob(x), comp.log_prob(
-            x.unsqueeze(1)
-        )  # todo a bit redundant but clearer for now
+        if masked_nodes is not None:
+            x[masked_nodes] = 0.  # just to make sure it's something computable
+
+            if mm._validate_args:
+                mm._validate_sample(x)
+            x = mm._pad(x)
+            comp_log_prob_x = comp.base_dist.log_prob(x)  # [Samples, Components, Features]
+            
+            masked_nodes_unsqueezed = masked_nodes.unsqueeze(1).repeat(1, comp_log_prob_x.shape[1], 1)
+            comp_log_prob_x[masked_nodes_unsqueezed] = comp_log_prob_x[masked_nodes_unsqueezed]*0
+
+            comp_log_prob_x = comp_log_prob_x.sum(dim=2)
+            log_prob = torch.logsumexp(comp_log_prob_x + mixture_weights.log(), dim=-1)  # [Samples, Components]
+
+            return log_prob, comp_log_prob_x
+
+        else:
+            return mm.log_prob(x), comp.log_prob(
+                x.unsqueeze(1)
+            )  # todo a bit redundant but clearer for now
 
     def initialize_means(self, cluster_centers):
         self.normal_params.data[:, :, 0] = cluster_centers
@@ -432,7 +470,7 @@ class GSPNGaussianEmission(GSPNEmission):
         self.normal_params = torch.nn.parameter.Parameter(torch.nn.init.uniform_(torch.empty(num_mixtures, dim_observable, 2)),
                                                    requires_grad=True)
 
-    def forward(self, x, mixture_weights):
+    def forward(self, x, mixture_weights, masked_nodes=None):
         normal_params = self.normal_params.reshape(
             (-1, self.num_mixtures, self.dim_observable, 2)
         )
@@ -448,7 +486,7 @@ class GSPNGaussianEmission(GSPNEmission):
         (
             per_vertex_log_likelihood,
             per_vertex_log_likelihood_components,
-        ) = self.log_likelihood(x, mixture_weights, normal_params)
+        ) = self.log_likelihood(x, mixture_weights, normal_params, masked_nodes)
         return (
             normal_params,
             per_vertex_log_likelihood,
@@ -489,16 +527,16 @@ class GSPN(ModelInterface):
         self.num_mixtures = config["num_mixtures"]
         self.num_hidden_neurons = config[
             "num_hidden_neurons"
-        ]  # same number of hidden neurons for all MLPs involved
+        ]  # -- NOT USED RIGHT NOW -- same number of hidden neurons for all MLPs involved 
         self.convolution_class = s2c(config["convolution_class"])
         self.emission_class = s2c(config["emission_class"])
         self.emissions = nn.ModuleList()
         self.transitions = nn.ModuleList()
         self.avg_parameters_across_layers = config.get('avg_parameters_across_layers', True)
         self.use_kmeans = config.get('init_kmeans', False)
-        #self.add_self_loops = config.get('add_self_loops', False)
-        #self.initialized = Parameter(torch.tensor(False), requires_grad=False)
-        #self.kmeans = KMeans(n_clusters=self.num_mixtures)
+        self.add_self_loops = config.get('add_self_loops', False)
+        self.initialized = Parameter(torch.tensor(False), requires_grad=False)
+        self.kmeans = KMeans(n_clusters=self.num_mixtures)
         self.dim_categorical_features = config.get('dim_categorical_features', None)
         if self.dim_categorical_features is not None:
             self.dim_categorical_features = list(self.dim_categorical_features.values())
@@ -552,19 +590,38 @@ class GSPN(ModelInterface):
             data.batch,
         )
 
-        # if self.add_self_loops:
-        #     edge_index = add_self_loops(edge_index)[0]
-        #
-        # if self.training and self.use_kmeans:
-        #     if not self.initialized:
-        #         print("Initializing kmeans...")
-        #         self.kmeans.fit(x.detach().cpu().numpy())
-        #         clusters = torch.tensor(self.kmeans.cluster_centers_)
-        #         mu = (clusters + torch.randn_like(clusters)).to(x.device)
-        #         for id_layer in range(self.num_layers):
-        #             self.emissions[id_layer].initialize_means(mu)
-        #         self.initialized.data = torch.tensor(True)
-        #         print("Done.")
+        x_original = x
+        x_imputed = x.clone()
+
+        if hasattr(data, 'mask'):
+            # MASK is a boolean (nodes, features) matrix that is TRUE if the node HAS a specific feature
+            node_mask = data.mask
+            masked_nodes = torch.logical_not(node_mask)
+            x_imputed[masked_nodes] = torch.nan
+            # Replacing nan with mean values to run kmeans initialization
+            mean_values = torch.nanmean(x_imputed, dim=0).repeat(x.shape[0], 1)
+            x_imputed[masked_nodes] = mean_values[masked_nodes]
+        else:
+            masked_nodes = None
+
+
+        if self.add_self_loops:
+            edge_index = add_self_loops(edge_index)[0]
+        
+        if self.training and self.use_kmeans:
+            if not self.initialized:
+                print("Initializing kmeans...")
+                self.kmeans.fit(x.detach().cpu().numpy())
+                clusters = torch.tensor(self.kmeans.cluster_centers_)
+                mu = (clusters + torch.randn_like(clusters)).to(x.device)
+                for id_layer in range(self.num_layers):
+                    self.emissions[id_layer].initialize_means(mu)
+                self.initialized.data = torch.tensor(True)
+                print("Done.")
+
+        if hasattr(data, 'mask'):
+            # Restore nan into masked positions, just to be sure
+            x_imputed[masked_nodes] = torch.nan
 
         node_posterior_layer = []  # list of one node embedding matrix per layer
         params_v_layer = []
@@ -584,7 +641,7 @@ class GSPN(ModelInterface):
 
             params_v, log_likelihood_v, log_likelihood_v_comp, imputed_values = self.emissions[
                 id_layer
-            ].forward(data.x, mixture_weights)
+            ].forward(x_imputed, mixture_weights, masked_nodes)
             params_v_layer.append(params_v)
 
             if id_layer == 0:
@@ -618,7 +675,7 @@ class GSPN(ModelInterface):
 
                         log_likelihood_v, log_likelihood_v_comp = self.emissions[
                             id_layer
-                        ].log_likelihood(x, mixture_weights, avg_params_across_layers)
+                        ].log_likelihood(x_imputed, mixture_weights, avg_params_across_layers, masked_nodes)
 
                         imputed_values = self.emissions[id_layer].impute(avg_params_across_layers, mixture_weights)
 
@@ -627,7 +684,7 @@ class GSPN(ModelInterface):
 
                         log_likelihood_v, log_likelihood_v_comp = self.emissions[
                             id_layer
-                        ].log_likelihood(x, mixture_weights, params_v)
+                        ].log_likelihood(x_imputed, mixture_weights, params_v, masked_nodes)
 
                 # Compute the deterministic "posterior" for unsupervised node embeddings
                 log_likelihood_v_comp_unsqueezed = log_likelihood_v_comp.unsqueeze(2)
@@ -643,7 +700,7 @@ class GSPN(ModelInterface):
                 node_posterior_layer.append(h_v)
 
         objective_v = log_likelihood_v  # this refers to the last layer, in which we may have averaged all parameters
-        print(objective_v.mean())
+        
         # node posteriors of all layers, interpreted as node embeddings
         node_posterior_layer = torch.stack(node_posterior_layer, dim=1)
 
