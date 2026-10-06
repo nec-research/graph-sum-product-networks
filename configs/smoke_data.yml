@@ -1,0 +1,18 @@
+# GSPN-GPT-FIXED: Tiny CPU smoke test; scores are not scientific results.
+dataset:
+  class_name: dataset.SmokeGraphDataset
+  args:
+    storage_folder: .smoke/data
+    seed: 42
+splitter:
+  splits_folder: .smoke/splits
+  class_name: mlwiz.data.splitter.Splitter
+  args:
+    n_outer_folds: 1
+    n_inner_folds: 1
+    seed: 42
+    stratify: true
+    shuffle: true
+    inner_val_ratio: 0.2
+    outer_val_ratio: 0.2
+    test_ratio: 0.2

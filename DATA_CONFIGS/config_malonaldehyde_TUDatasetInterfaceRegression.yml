@@ -1,0 +1,26 @@
+# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
+splitter:
+  splits_folder: DATA_SPLITS_MLWIZ/malonaldehyde
+  class_name: migration.PreservedSplitter
+  args:
+    n_outer_folds: 1
+    n_inner_folds: 1
+    seed: 42
+    stratify: false
+    shuffle: true
+    inner_val_ratio: 0.1
+    outer_val_ratio: 0.1
+    test_ratio: 0.1
+    legacy_splits_file: DATA_SPLITS/CHEMICAL/malonaldehyde/malonaldehyde_outer1_inner1.splits
+dataset:
+  class_name: dataset.TUDatasetInterfaceRegression
+  args:
+    root: DATA
+    name: malonaldehyde
+    storage_folder: DATA_MLWIZ/malonaldehyde_TUDatasetInterfaceRegression
+    seed: 42
+    pre_transform:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.NegativeSampling

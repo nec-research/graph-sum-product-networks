@@ -145,8 +145,9 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-from pydgn.model.interface import ModelInterface
-from pydgn.training.event.handler import EventHandler
+# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
+from mlwiz.model.interface import ModelInterface
+from mlwiz.training.event.handler import EventHandler
 
 
 class FakeOptimizer(EventHandler):

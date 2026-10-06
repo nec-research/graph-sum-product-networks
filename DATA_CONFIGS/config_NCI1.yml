@@ -1,18 +1,21 @@
+# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
 splitter:
-  root: DATA_SPLITS/CHEMICAL
-  class_name: pydgn.data.splitter.Splitter
+  splits_folder: DATA_SPLITS_MLWIZ/NCI1
+  class_name: migration.PreservedSplitter
   args:
     n_outer_folds: 10
     n_inner_folds: 1
     seed: 42
-    stratify: True  # works for graph classification tasks
-    shuffle: True
+    stratify: true
+    shuffle: true
     inner_val_ratio: 0.1
     outer_val_ratio: 0.1
     test_ratio: 0.1
+    legacy_splits_file: DATA_SPLITS/CHEMICAL/NCI1/NCI1_outer10_inner1.splits
 dataset:
-  root: DATA
-  class_name: pydgn.data.dataset.TUDatasetInterface
+  class_name: dataset.TUDatasetInterface
   args:
     root: DATA
     name: NCI1
+    storage_folder: DATA_MLWIZ/NCI1
+    seed: 42

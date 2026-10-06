@@ -145,174 +145,208 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-import copy
-import os
-from typing import Union, List, Tuple
+
+# GSPN-GPT-FIXED: MLWiz adapters preserve graph order and return (graph, target).
+import hashlib
+import json
+from pathlib import Path
 
 import torch
-from pydgn.data.dataset import InMemoryDataset, OGBGDatasetInterface, TUDatasetInterface
+from mlwiz.data.dataset import DatasetInterface
 from torch_geometric.data import Data
 from torch_geometric.datasets import TUDataset
 
-class SyntheticDataset(InMemoryDataset):
 
-    def __init__(self, root, name, raw_dir, per_community_weight, structure_weight,
-                 transform=None, pre_transform=None, **kwargs):
-        self.per_community_weight = per_community_weight
-        self.structure_weight = structure_weight
-        self.name = f'{name}_{per_community_weight}_{structure_weight}'
-        self._raw_dir = raw_dir
-        super().__init__(root=root, transform=transform, pre_transform=pre_transform, **kwargs)
-        self._data_list = torch.load(self.processed_paths[0])
+def transform_identity(value):
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [transform_identity(v) for v in value]
+    if isinstance(value, dict):
+        return {k: transform_identity(v) for k, v in value.items()}
+    if isinstance(value, torch.Tensor):
+        return value.tolist()
+    return {
+        "class": type(value).__module__ + "." + type(value).__qualname__,
+        "args": transform_identity(vars(value)),
+    }
 
-    @property
-    def raw_dir(self) -> str:
-        return self._raw_dir
 
-    @property
-    def raw_file_names(self) -> Union[str, List[str], Tuple]:
-        return [f'data_list_{(i+1)*100}.pt' for i in range(1)]
+class GraphDataset(DatasetInterface):
+    def __init__(
+        self,
+        storage_folder,
+        name=None,
+        root="DATA",
+        raw_dataset_folder=None,
+        transform_train=None,
+        transform_eval=None,
+        pre_transform=None,
+        seed=42,
+        **kwargs,
+    ):
+        self.source_name = name or type(self).__name__
+        self.source_root = root
+        self.options = kwargs
+        self.seed = seed
+        # GSPN-GPT-FIXED: Dataset-specific preprocessing identity avoids stale cache collisions.
+        identity = {
+            "name": self.source_name,
+            "root": str(Path(root).resolve()),
+            "raw": raw_dataset_folder,
+            "options": kwargs,
+            "seed": seed,
+            "pre_transform": transform_identity(pre_transform),
+        }
+        digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            super().__init__(
+                str(Path(storage_folder) / digest),
+                raw_dataset_folder,
+                transform_train,
+                transform_eval,
+                pre_transform,
+            )
 
-    @property
-    def processed_file_names(self) -> Union[str, List[str], Tuple]:
-        return [f'data.pt']
+    @staticmethod
+    def _save_dataset(dataset, dataset_filepath):
+        torch.save(dataset, dataset_filepath)
 
-    @property
-    def processed_dir(self) -> str:
-       return os.path.join(self.root, self.name, 'processed')
+    @staticmethod
+    def _load_dataset(dataset_filepath):
+        return torch.load(dataset_filepath, weights_only=False)
 
-    @property
-    def raw_paths(self) -> List[str]:
-        r"""The absolute filepaths that must be present in order to skip
-        downloading."""
-        files = self.raw_file_names
-        return [os.path.join(self.raw_dir, f) for f in files]
-
-    @property
-    def processed_paths(self) -> List[str]:
-        r"""The absolute filepaths that must be present in order to skip
-        processing."""
-        files = self.processed_file_names
-        return [os.path.join(self.processed_dir, f) for f in files]
-
-    def download(self):
-        pass
-
-    def get(self, idx: int) -> Data:
-        return copy.copy(self._data_list[idx])
-
-    def process(self):
-
-        data_list = []
-
-        for raw_path in self.raw_paths:
-
-            partial_data_list = torch.load(raw_path)
-
-            if self.pre_transform is not None:
-                partial_data_list = [self.pre_transform(data) for data in partial_data_list]
-
-            data_list.extend(partial_data_list)
-
-        print(len(data_list))
-        # TUDataset expects data and slices, we directly store the data list
-        torch.save(data_list, self.processed_paths[0])
-
-    @property
-    def dim_node_features(self):
-        return self._data_list[0].x.shape[1]
+    def __getitem__(self, index):
+        graph, target = self.dataset[index]
+        return graph.clone(), target.clone()
 
     @property
-    def dim_edge_features(self):
-        return 0
+    def dim_input_features(self):
+        graph = self.dataset[0][0]
+        return (
+            graph.x.shape[1],
+            graph.edge_attr.shape[1]
+            if graph.edge_attr is not None and graph.edge_attr.ndim > 1
+            else 0,
+        )
 
     @property
     def dim_target(self):
-        return 0
+        return self._target_dimension()
 
-    def len(self) -> int:
-        return len(self._data_list)
+    def _target_dimension(self):
+        return 1
 
-    def __len__(self) -> int:
-        return len(self._data_list)
+    def _samples(self, graphs):
+        # Fixed seed makes precomputed masks reproducible without disturbing experiment RNG.
+        result = []
+        for index, source in enumerate(graphs):
+            graph = source.clone()
+            graph.sample_id = torch.tensor([index])
+            target = graph.y.clone() if graph.y is not None else torch.zeros(1)
+            result.append((graph, target.reshape(-1)))
+        return result
 
-    def __repr__(self) -> str:
-        return f'{self.name}({len(self)})'
+    def process_dataset(self):
+        raise NotImplementedError("Use a concrete graph dataset adapter")
 
 
-class OGBGmolpcbaFeatureMap(OGBGDatasetInterface):
+class TUDatasetInterface(GraphDataset):
+    def process_dataset(self):
+        graphs = TUDataset(
+            root=self.source_root,
+            name=self.source_name,
+            use_node_attr=self.options.get("use_node_attr", False),
+        )
+        return self._samples(graphs)
 
-    def __init__(self, root, name, transform=None,
-                 pre_transform=None, pre_filter=None, meta_dict=None, **kwargs):
-        super().__init__(root, name, transform, pre_transform, pre_filter, meta_dict)
-
-        num_features = self.data.x.shape[1]
-        for f in range(num_features):
-            unique_values = torch.sort(torch.unique(self.data.x[:,f]), descending=False)[0]
-            id = 0
-            for v in unique_values.tolist():
-                assert id <= v
-                self.data.x[:, f][self.data.x[:, f] == v] = id
-                id += 1
-
-    def download(self):
-        super().download()
-
-    def process(self):
-        super().process()
+    def _target_dimension(self):
+        target = self.dataset[0][1]
+        if target.is_floating_point():
+            return target.numel()
+        return int(torch.cat([target for _, target in self.dataset]).max().item()) + 1
 
 
 class TUDatasetInterfaceRegression(TUDatasetInterface):
-
-    @property
-    def dim_target(self):
-        return self.data.y.shape[1] if len(self.data.y.shape) > 1 else 1
-
-    def download(self):
-        super().download()
-
-    def process(self):
-        super().process()
+    def _target_dimension(self):
+        return self.dataset[0][1].numel()
 
 
-class TUDatasetInterfaceMissingData(TUDataset):
+class TUDatasetInterfaceMissingData(TUDatasetInterfaceRegression):
+    def __init__(self, *args, **kwargs):
+        kwargs["use_node_attr"] = True
+        super().__init__(*args, **kwargs)
 
-    def __init__(
-        self,
-        root,
-        name,
-        transform=None,
-        pre_transform=None,
-        pre_filter=None,
-        **kwargs,
-    ):
-        self.name = name
-        # Do not call DatasetInterface __init__ method in this case, because
-        # otherwise it will break
-        super().__init__(
-            root=root,
-            name=name,
-            transform=transform,
-            pre_transform=pre_transform,
-            pre_filter=pre_filter,
-            use_node_attr=True
+
+class OGBGDatasetInterface(GraphDataset):
+    def process_dataset(self):
+        from ogb.graphproppred import PygGraphPropPredDataset
+
+        graphs = PygGraphPropPredDataset(name=self.source_name, root=self.source_root)
+        self.official_split = {k: v.tolist() for k, v in graphs.get_idx_split().items()}
+        (self.dataset_folder / "official_splits.json").write_text(json.dumps(self.official_split))
+        return self._samples(graphs)
+
+    def _target_dimension(self):
+        return self.dataset[0][1].numel()
+
+
+class OGBGmolpcbaFeatureMap(OGBGDatasetInterface):
+    def process_dataset(self):
+        samples = super().process_dataset()
+        # GSPN-GPT-FIXED: Preserve the original category-ID mapping and graph order.
+        values = torch.cat([g.x for g, _ in samples])
+        vocabulary = [torch.unique(values[:, i], sorted=True) for i in range(values.shape[1])]
+        # GSPN-GPT-FIXED: Persist the original IDs for consistent SMILES query encoding.
+        (self.dataset_folder / "categorical_vocabulary.json").write_text(
+            json.dumps([v.tolist() for v in vocabulary])
         )
+        for graph, _ in samples:
+            graph.x = torch.stack(
+                [torch.searchsorted(vocabulary[i], graph.x[:, i]) for i in range(graph.x.shape[1])],
+                dim=1,
+            )
+        return samples
 
 
-    @property
-    def dim_target(self):
-        return self.data.y.shape[1] if len(self.data.y.shape) > 1 else 1
+class SyntheticDataset(GraphDataset):
+    def process_dataset(self):
+        raw = Path(self.options.get("raw_dir") or str(self._raw_dataset_folder or "GENERATED_DATA"))
+        # GSPN-GPT-FIXED: Keep the original raw-file selection and sample ordering.
+        files = [raw / 'data_list_100.pt']
+        if not all(path.exists() for path in files):
+            raise FileNotFoundError(
+                f"No data_list_*.pt files in {raw}; generate raw data using the notebook"
+            )
+        graphs = [g for path in files for g in torch.load(path, weights_only=False)]
+        # GSPN-GPT-FIXED: Node community labels are not graph targets; batch a dummy target.
+        return [(graph, torch.zeros(1)) for graph, _ in self._samples(graphs)]
 
-    def download(self):
-        super().download()
+    def _target_dimension(self):
+        return 0
 
-    def process(self):
-        super().process()
 
-    @property
-    def dim_node_features(self) -> int:
-        return self.num_node_features
+class SmokeGraphDataset(GraphDataset):
+    """Small deterministic graph fixture; smoke scores are not research results."""
 
-    @property
-    def dim_edge_features(self) -> int:
-        return self.num_edge_features
+    def process_dataset(self):
+        # GSPN-GPT-FIXED: Test the real MLWiz CLI without downloading scientific datasets.
+        generator = torch.Generator().manual_seed(self.seed)
+        graphs = []
+        for i in range(30):
+            x = torch.randn(4, 2, generator=generator) + (i % 2)
+            mask = torch.ones_like(x, dtype=torch.bool)
+            mask[i % 4, i % 2] = False
+            graphs.append(
+                Data(
+                    x=x,
+                    edge_index=torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]]),
+                    y=torch.tensor([i % 2]),
+                    mask=mask,
+                )
+            )
+        return self._samples(graphs)
+
+    def _target_dimension(self):
+        return 2

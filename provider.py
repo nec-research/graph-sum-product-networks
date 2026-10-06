@@ -145,55 +145,61 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-import math
-from typing import Union
 
-import torch
-import torch_geometric
-from pydgn.data.provider import DataProvider
+# GSPN-GPT-FIXED: MLWiz provider preserves named partitions and evaluation transforms.
+import math
+
+from mlwiz.data.provider import DataProvider as BaseDataProvider
+
+
+# GSPN-GPT-FIXED: Validate loaded artifacts even when mlwiz-data reuses existing files.
+class DataProvider(BaseDataProvider):
+    def _get_splitter(self):
+        splitter = super()._get_splitter()
+        if not getattr(self, "_validated_splits", False):
+            from migration import validate_splits
+
+            dataset = self._get_dataset()
+            validate_splits(
+                {
+                    "splitter_args": splitter._splitter_args(),
+                    "outer_folds": [f.todict() for f in splitter.outer_folds],
+                    "inner_folds": [[f.todict() for f in fs] for fs in splitter.inner_folds],
+                },
+                len(dataset),
+            )
+            self._validated_splits = True
+        return splitter
 
 
 class WeakSupervisionDataProvider(DataProvider):
-    def get_inner_train(self, **kwargs: dict) -> Union[torch.utils.data.DataLoader,
-                                                 torch_geometric.loader.DataLoader]:
-        assert self.outer_k is not None and self.inner_k is not None
-        splitter = self._get_splitter()
-        indices = splitter.inner_folds[self.outer_k][self.inner_k].train_idxs
-        weak_supervision_percentage = kwargs.pop('weak_supervision_percentage')
-        indices = indices[:math.floor(weak_supervision_percentage*len(indices))]
-        return self._get_loader(indices, **kwargs)
+    def _fraction(self, indices, kwargs):
+        fraction = kwargs.pop(
+            "weak_supervision_percentage", getattr(self, "supervision_fraction", 1.0)
+        )
+        if not 0 < fraction <= 1:
+            raise ValueError("weak_supervision_percentage must be in (0, 1]")
+        count = math.floor(fraction * len(indices))
+        if count == 0:
+            raise ValueError("The supervision fraction selects no samples")
+        return indices[:count]
 
-    def get_inner_val(self, **kwargs: dict) -> Union[torch.utils.data.DataLoader,
-                                                torch_geometric.loader.DataLoader]:
-        assert self.outer_k is not None and self.inner_k is not None
-        splitter = self._get_splitter()
-        indices = splitter.inner_folds[self.outer_k][self.inner_k].val_idxs
-        weak_supervision_percentage = kwargs.pop('weak_supervision_percentage')
-        indices = indices[:math.floor(weak_supervision_percentage*len(indices))]
-        return self._get_loader(indices, **kwargs)
+    def get_inner_train(self, **kwargs):
+        fold = self._get_splitter().inner_folds[self.outer_k][self.inner_k]
+        return self._get_loader(self._fraction(fold.train_idxs, kwargs), is_eval=False, **kwargs)
 
-    def get_outer_train(self, **kwargs: dict) -> Union[torch.utils.data.DataLoader,
-                                                                  torch_geometric.loader.DataLoader]:
-        assert self.outer_k is not None
-        splitter = self._get_splitter()
-        train_indices = splitter.outer_folds[self.outer_k].train_idxs
-        weak_supervision_percentage = kwargs.pop('weak_supervision_percentage')
-        train_indices = train_indices[:math.floor(weak_supervision_percentage*len(train_indices))]
-        return self._get_loader(train_indices, **kwargs)
+    def get_inner_val(self, **kwargs):
+        fold = self._get_splitter().inner_folds[self.outer_k][self.inner_k]
+        return self._get_loader(self._fraction(fold.val_idxs, kwargs), is_eval=True, **kwargs)
 
-    def get_outer_val(self, **kwargs: dict) -> Union[torch.utils.data.DataLoader,
-                                                                  torch_geometric.loader.DataLoader]:
-        assert self.outer_k is not None
-        splitter = self._get_splitter()
-        val_indices = splitter.outer_folds[self.outer_k].val_idxs
-        weak_supervision_percentage = kwargs.pop('weak_supervision_percentage')
-        val_indices = val_indices[:math.floor(weak_supervision_percentage*len(val_indices))]
-        return self._get_loader(val_indices, **kwargs)
+    def get_outer_train(self, **kwargs):
+        fold = self._get_splitter().outer_folds[self.outer_k]
+        return self._get_loader(self._fraction(fold.train_idxs, kwargs), is_eval=False, **kwargs)
 
-    def get_outer_test(self, **kwargs: dict) -> Union[torch.utils.data.DataLoader,
-                                                torch_geometric.loader.DataLoader]:
-        assert self.outer_k is not None
-        splitter = self._get_splitter()
-        indices = splitter.outer_folds[self.outer_k].test_idxs
-        # We want to evaluate on the entire test set
-        return self._get_loader(indices, **kwargs)
+    def get_outer_val(self, **kwargs):
+        fold = self._get_splitter().outer_folds[self.outer_k]
+        return self._get_loader(self._fraction(fold.val_idxs, kwargs), is_eval=True, **kwargs)
+
+    def get_outer_test(self, **kwargs):
+        kwargs.pop("weak_supervision_percentage", None)
+        return super().get_outer_test(**kwargs)

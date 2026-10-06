@@ -1,172 +1,114 @@
-# Dataset and Splits
-data_root: DATA
-dataset_class: pydgn.data.dataset.TUDatasetInterface
-dataset_name:  NCI1
-data_splits_file:  DATA_SPLITS/CHEMICAL/NCI1/NCI1_outer10_inner1.splits
-
-
-# Hardware
-device:  cuda
-max_cpus:  64
-max_gpus: 3
-gpus_per_task:  0.25
-
-
-# Data Loading
-dataset_getter: pydgn.data.provider.DataProvider
-data_loader:
-  class_name: torch_geometric.loader.DataLoader
-  args:
-    num_workers : 2
-    pin_memory: True
-
-
-# Reproducibility
-seed: 42
-
-
-# Experiment
-result_folder: GSPN_RESULTS/UNSUPERVISED
-exp_name: unsupervised_embedding_classification_chemical_graph_embedding
-experiment: unsupervised_embedding_classification.ClassificationTask
-higher_results_are_better: True
-evaluate_every: 1
-final_training_runs: 1
-
+# GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
+dataset:
+  storage_folder: DATA_MLWIZ/NCI1
+  dataset_class: dataset.TUDatasetInterface
+  data_splits_file: DATA_SPLITS_MLWIZ/NCI1/TUDatasetInterface/TUDatasetInterface_outer10_inner1.splits
+resources:
+  device: cuda
+  max_cpus: 64
+  max_gpus: 3
+  gpus_per_task: 0.25
+  sync_batchnorm: false
+reproducibility:
+  seed: 42
+data_loading:
+  dataset_getter: provider.DataProvider
+  data_loader:
+    class_name: torch_geometric.loader.DataLoader
+    args:
+      num_workers: 2
+      pin_memory: true
+experiment:
+  result_folder: RESULTS_MLWIZ
+  exp_name: unsup_model_embedding_classification_graph_emb_CHEMICAL_NCI1_mlwiz
+  experiment: pipeline.EmbeddingPipeline
+  model_selection_criteria:
+  - metric: main_score
+    direction: max
+  evaluate_every: 1
+  risk_assessment_training_runs: 1
+  model_selection_training_runs: 1
 grid:
-  unsupervised_config:
+  encoder:
     model: model.GSPN
-    checkpoint: True
-    shuffle: True
+    checkpoint: true
+    shuffle: true
     batch_size: 32
     epochs: 500
-
-    # Model specific arguments #
-
-    embeddings_folder: 'UNSUP_GSPN_EMBEDDINGS_BASIC/'
-
+    embeddings_folder: UNSUP_GSPN_EMBEDDINGS_BASIC/
     convolution_class: model.GSPNBaseConv
     emission_class: model.GSPNCategoricalEmission
     num_mixtures:
-      - 10
-      - 5
-      - 20
+    - 10
+    - 5
+    - 20
     num_hidden_neurons:
-      - 0  # not used at the moment
+    - 0
     num_layers:
-      - 2
-      - 5
-      - 10
-      - 15
-      - 20
-
-    # ------------------------ #
-
-    # Optimizer
+    - 2
+    - 5
+    - 10
+    - 15
+    - 20
     optimizer:
-      - class_name: pydgn.training.callback.optimizer.Optimizer
-        args:
-          optimizer_class_name: torch.optim.Adam
-          lr: 0.1
-          accumulate_gradients: False  # do/do not accumulate gradient across mini-batches
-
-    # Scheduler
+    - class_name: mlwiz.training.callback.optimizer.Optimizer
+      args:
+        optimizer_class_name: torch.optim.Adam
+        lr: 0.1
+        accumulate_gradients: false
     scheduler: null
-
-    # Loss metric
     loss:
-      - class_name: metric.GSPNNodeLogLikelihood
-        args:
-          use_nodes_batch_size: True
-
-    # Score metric
+    - class_name: metric.GSPNNodeLogLikelihood
+      args: {}
     scorer:
-      - class_name: pydgn.training.callback.metric.MultiScore
-        args:
-          main_scorer:
-            - class_name: metric.GSPNNodeLogLikelihood
-              args:
-                use_nodes_batch_size: True
-
-    # Readout (optional)
+    - class_name: mlwiz.training.callback.metric.MultiScore
+      args:
+        main_scorer:
+        - class_name: metric.GSPNNodeLogLikelihood
+          args: {}
     readout: null
-
-    # Training engine
-    engine: pydgn.training.engine.TrainingEngine
-
-    # Gradient clipper (optional)
+    engine: mlwiz.training.engine.TrainingEngine
     gradient_clipper: null
-
-    # Early stopper
     early_stopper:
-      - class_name:
-          - pydgn.training.callback.early_stopping.PatienceEarlyStopper
-        args:
-          patience:
-            - 50
-          monitor: validation_main_score
-          mode: min
-          checkpoint: True
-
-    # Plotter of metrics
-    plotter: pydgn.training.callback.plotter.Plotter
-
-  supervised_config:
+    - class_name:
+      - mlwiz.training.callback.early_stopping.PatienceEarlyStopper
+      args:
+        patience:
+        - 50
+        monitor: validation_main_score
+        mode: min
+        checkpoint: true
+    plotter: mlwiz.training.callback.plotter.Plotter
+  predictor:
     model: readout.MLPGraphClassifier_GraphEmbedding
-    checkpoint: True
-    shuffle: True
+    checkpoint: true
+    shuffle: true
     batch_size: 32
     epochs: 1000
-
-    # Model specific arguments #
-
-    embeddings_folder: 'UNSUP_GSPN_EMBEDDINGS_BASIC/'
-
+    embeddings_folder: UNSUP_GSPN_EMBEDDINGS_BASIC/
     global_pooling: sum
-
     hidden_units:
-      - 8
-      - 16
-      - 32
-      - 128
-
-    # ------------------------ #
-
-    # Optimizer
+    - 8
+    - 16
+    - 32
+    - 128
     optimizer:
-      -
-        class_name: pydgn.training.callback.optimizer.Optimizer
-        args:
-          optimizer_class_name: torch.optim.Adam
-          lr: 0.001
-
-    # Scheduler
+    - class_name: mlwiz.training.callback.optimizer.Optimizer
+      args:
+        optimizer_class_name: torch.optim.Adam
+        lr: 0.001
     scheduler: null
-
-    # Loss metric
-    loss: pydgn.training.callback.metric.MulticlassClassification
-
-    # Score metric
-    scorer: pydgn.training.callback.metric.MulticlassAccuracy
-
-    # Readout (optional)
+    loss: mlwiz.training.callback.metric.MulticlassClassification
+    scorer: mlwiz.training.callback.metric.MulticlassAccuracy
     readout: null
-
-    # Training engine
-    engine: pydgn.training.engine.TrainingEngine
-
-    # Gradient clipper (optional)
+    engine: mlwiz.training.engine.TrainingEngine
     gradient_clipper: null
-
-    # Early stopper
     early_stopper:
-      -
-        class_name: pydgn.training.callback.early_stopping.PatienceEarlyStopper
-        args:
-          patience: 200
-          monitor: validation_main_score
-          mode: max
-          checkpoint: True
-
-    # Plotter of metrics
-    plotter: pydgn.training.callback.plotter.Plotter
+    - class_name: mlwiz.training.callback.early_stopping.PatienceEarlyStopper
+      args:
+        patience: 200
+        monitor: validation_main_score
+        mode: max
+        checkpoint: true
+    plotter: mlwiz.training.callback.plotter.Plotter
+  embeddings_folder: EMBEDDINGS_MLWIZ

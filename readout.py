@@ -145,12 +145,14 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from typing import Tuple, Optional, List
 
 import torch
 import torch.nn as nn
-from pydgn.experiment.util import s2c
-from pydgn.model.interface import ReadoutInterface, ModelInterface
+from mlwiz.util import s2c
+from mlwiz.model.interface import ModelInterface
+from model import graph_dimensions
 import torch.nn.functional as F
 from torch.nn import Parameter
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
@@ -162,8 +164,11 @@ class LinearGraphClassifier_GlobalReadout(ModelInterface):
     """
     This MLP computes a prediction starting from node embeddings
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         if config['global_pooling'] == 'sum':
             self.global_pooling = global_add_pool
@@ -187,8 +192,11 @@ class MLPGraphClassifier_GlobalReadout(ModelInterface):
     """
     This MLP computes a prediction starting from node embeddings
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         if config['global_pooling'] == 'sum':
             self.global_pooling = global_add_pool
@@ -218,8 +226,11 @@ class MLPGraphClassifier_GraphEmbedding(ModelInterface):
     """
     This MLP computes a prediction starting from graph embeddings, without transforming the node embeddings
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         if config['global_pooling'] == 'sum':
             self.global_pooling = global_add_pool
@@ -244,12 +255,12 @@ class MLPGraphClassifier_GraphEmbedding(ModelInterface):
         return out, g
 
 
-class ProbabilisticGraphReadout(ReadoutInterface):
+class ProbabilisticGraphReadout(nn.Module):
     """
     This is a probabilistic readout for predicting graph-related targets
     """
     def __init__(self, dim_node_features, dim_edge_features, dim_target, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, config)
+        super().__init__()
 
         node_embedding_dim = config['num_mixtures']
         num_graph_mixtures = config['num_mixtures']
@@ -267,6 +278,8 @@ class ProbabilisticGraphReadout(ReadoutInterface):
             self.global_pooling = global_add_pool
         elif config['global_pooling'] == 'mean':
             self.global_pooling = global_mean_pool
+        else:
+            raise ValueError('Probabilistic pooling must be sum or mean')
 
         self.emission_class = s2c(config['graph_emission_class'])
         self.emission = self.emission_class(dim_target,
@@ -289,8 +302,9 @@ class ProbabilisticGraphReadout(ReadoutInterface):
 
         mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
 
-        params_g, log_likelihood_g, log_likelihood_g_comp = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.infer(mixture_weights_g, params_g)
+        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
+        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
+        preds_g = self.emission.impute(params_g, mixture_weights_g)
 
         return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g
 
@@ -311,8 +325,9 @@ class ProbabilisticGraphReadoutNoLayerAttention(ProbabilisticGraphReadout):
 
         mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
 
-        params_g, log_likelihood_g, log_likelihood_g_comp = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.infer(mixture_weights_g, params_g)
+        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
+        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
+        preds_g = self.emission.impute(params_g, mixture_weights_g)
 
         return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g
 
@@ -355,7 +370,8 @@ class ProbabilisticGraphReadoutNoLayerAttentionMLPVersion2(ProbabilisticGraphRea
 
         mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
 
-        params_g, log_likelihood_g, log_likelihood_g_comp = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.infer(mixture_weights_g, params_g)
+        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
+        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
+        preds_g = self.emission.impute(params_g, mixture_weights_g)
 
         return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g

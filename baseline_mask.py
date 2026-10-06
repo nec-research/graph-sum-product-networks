@@ -145,11 +145,13 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from typing import Tuple, Optional, List, Any
 
 import torch
 import torch.nn as nn
-from pydgn.model.interface import ModelInterface
+from mlwiz.model.interface import ModelInterface
+from model import graph_dimensions
 from torch.distributions import (
     Bernoulli, Normal, Independent,
 )
@@ -157,10 +159,17 @@ from torch.nn import Linear, ReLU, Sequential, Identity, Sigmoid, BatchNorm1d
 from torch.nn.functional import softplus, dropout
 from torch.nn.parameter import Parameter
 from torch_geometric.data import Batch
-from pydgn.experiment.util import s2c
+from mlwiz.util import s2c
 from torch_geometric.nn import global_add_pool, global_mean_pool, GINConv
 from torch_geometric.utils import degree
-from torch_scatter import scatter_mean, scatter_sum
+from torch_geometric.utils import scatter
+
+# GSPN-GPT-FIXED: Use PyG/PyTorch scatter to avoid platform-specific extension wheels.
+def scatter_sum(src, index, dim=0, dim_size=None):
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum")
+
+def scatter_mean(src, index, dim=0, dim_size=None):
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce="mean")
 
 
 class GaussianEmission(nn.Module):
@@ -177,12 +186,11 @@ class GaussianEmission(nn.Module):
 
 class MeanAggregation(ModelInterface):
 
-    def __init__(
-        self, dim_node_features, dim_edge_features, dim_target, readout_class, config
-    ):
-        super().__init__(
-            dim_node_features, dim_edge_features, dim_target, readout_class, config
-        )
+    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
         self.dummy_param = Parameter(torch.ones(1))
         self.mean_values = None
 
@@ -248,8 +256,11 @@ class GAE(ModelInterface):
     """
     Modified GAE that reconstructs node features rather than structure as in the original paper
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         self.config = config
         self.dropout = config['dropout']

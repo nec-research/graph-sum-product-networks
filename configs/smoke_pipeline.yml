@@ -1,0 +1,74 @@
+# GSPN-GPT-FIXED: MLWiz configuration with validated saved partitions.
+dataset:
+  storage_folder: .smoke/data
+  dataset_class: dataset.SmokeGraphDataset
+  data_splits_file: .smoke/splits/SmokeGraphDataset/SmokeGraphDataset_outer1_inner1.splits
+resources:
+  device: cpu
+  max_cpus: 1
+  max_gpus: 0
+  gpus_per_task: 0
+  sync_batchnorm: false
+reproducibility:
+  seed: 42
+data_loading:
+  dataset_getter: provider.DataProvider
+  data_loader:
+    class_name: torch_geometric.loader.DataLoader
+    args:
+      num_workers: 0
+experiment:
+  result_folder: .smoke/results
+  exp_name: pipeline_smoke
+  experiment: pipeline.EmbeddingPipeline
+  model_selection_criteria:
+  - metric: main_score
+    direction: max
+  evaluate_every: 1
+  risk_assessment_training_runs: 1
+  model_selection_training_runs: 1
+grid:
+  encoder:
+    checkpoint: true
+    shuffle: true
+    batch_size: 8
+    epochs: 2
+    optimizer: &id001
+      class_name: mlwiz.training.callback.optimizer.Optimizer
+      args:
+        optimizer_class_name: torch.optim.Adam
+        lr: 0.01
+    scheduler: null
+    engine: mlwiz.training.engine.TrainingEngine
+    gradient_clipper: null
+    early_stopper: null
+    plotter: null
+    model: model.GSPN
+    num_layers: 2
+    num_mixtures: 2
+    num_hidden_neurons: 0
+    emission_class: model.GSPNGaussianEmission
+    convolution_class: model.GSPNBaseConv
+    avg_parameters_across_layers: false
+    loss: metric.GSPNNodeLogLikelihood
+    scorer: metric.GSPNNodeLogLikelihood
+    readout: null
+  predictor:
+    checkpoint: true
+    shuffle: true
+    batch_size: 8
+    epochs: 2
+    optimizer: *id001
+    scheduler: null
+    engine: mlwiz.training.engine.TrainingEngine
+    gradient_clipper: null
+    early_stopper: null
+    plotter: null
+    model: readout.MLPGraphClassifier_GlobalReadout
+    hidden_units: 4
+    global_pooling: mean
+    loss: mlwiz.training.callback.metric.MulticlassClassification
+    scorer: mlwiz.training.callback.metric.MulticlassAccuracy
+    readout: null
+  weak_supervision_percentage: 1.0
+  embeddings_folder: .smoke/embeddings

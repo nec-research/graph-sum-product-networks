@@ -145,14 +145,15 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from random import shuffle
 from typing import List, Tuple
 
 import numpy as np
 import torch
 from ogb import graphproppred
-from pydgn.training.callback.metric import Metric, MulticlassAccuracy, Classification
-from pydgn.training.event.state import State
+from mlwiz.training.callback.metric import Metric, MulticlassAccuracy, Classification
+from mlwiz.training.event.state import State
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 from torch import Tensor
 from torch.nn.functional import binary_cross_entropy_with_logits
@@ -208,11 +209,16 @@ class MissingFeaturesMSE(Metric):
         x, imputed_values = outputs[2][3], outputs[2][4]
         masked_nodes = outputs[2][5]
 
+        # GSPN-GPT-FIXED: A batch with no mask has no hidden features to score.
+        if masked_nodes is None:
+            return imputed_values.reshape(-1)[:0], x.reshape(-1)[:0]
         return imputed_values[masked_nodes], x[masked_nodes]
 
 
     def compute_metric(self, targets: torch.Tensor, predictions: torch.Tensor) -> torch.tensor:
-        return torch.nn.functional.mse_loss(predictions, targets)
+        # GSPN-GPT-FIXED: Skip missing ground truth and return zero for an empty batch.
+        valid = torch.isfinite(targets)
+        return torch.nn.functional.mse_loss(predictions[valid], targets[valid]) if valid.any() else predictions.sum() * 0
 
 
 class ConditionalMeanImputationLikelihood(Metric):
@@ -222,22 +228,15 @@ class ConditionalMeanImputationLikelihood(Metric):
 
     def get_predictions_and_targets(self, targets: torch.Tensor, *outputs: List[torch.Tensor]) -> Tuple[
         torch.Tensor, torch.Tensor]:
-        log_likelihood_missing_v = outputs[2][9]
-        masked_nodes = outputs[2][5]
-        num_masked_features = masked_nodes.sum(1, keepdim=True)
+        # GSPN-GPT-FIXED: Only evaluate conditional likelihood where hidden truth exists.
+        values = outputs[2][9]
+        mask = outputs[2][5]
+        count = mask.reshape(mask.shape[0], -1).sum(1) if mask is not None else torch.zeros_like(values)
+        valid = (count > 0) & torch.isfinite(values)
+        return values[valid], count[valid]
 
-        return log_likelihood_missing_v, num_masked_features
-
-    def compute_metric(self, targets: torch.Tensor, predictions: torch.Tensor) -> torch.tensor:
-        num_masked_features = targets
-        log_likelihood_missing_v = predictions
-
-        # Filter out nodes for which there are no missing features
-        # log_likelihood_missing_v = log_likelihood_missing_v[num_masked_features.squeeze() != 0]
-        # num_masked_features = num_masked_features[num_masked_features.squeeze() != 0, :]
-        # return (-log_likelihood_missing_v/num_masked_features.squeeze()).mean()
-
-        return (-log_likelihood_missing_v).mean()
+    def compute_metric(self, targets, predictions):
+        return -predictions.mean() if predictions.numel() else predictions.sum()
 
 
 class FakeLoss(Metric):
@@ -275,15 +274,15 @@ class BCEWithLogits(Classification):
         return pred, targets
 
     def compute_metric(self, targets: torch.Tensor, predictions: torch.Tensor) -> torch.tensor:
-        bce = binary_cross_entropy_with_logits(predictions, targets)
+        bce = binary_cross_entropy_with_logits(predictions, targets) if targets.numel() else predictions.sum() * 0
         return bce
 
 
 class OGBGROCAUC(MulticlassAccuracy):
 
     def __init__(self, use_as_loss: bool=False, reduction: str='mean',
-                 accumulate_over_epoch: bool=True, force_cpu: bool=True):
-        super().__init__(use_as_loss, reduction, accumulate_over_epoch, force_cpu)
+                 accumulate_over_epoch: bool=True, force_cpu: bool=True, device: str='cpu', **kwargs):
+        super().__init__(use_as_loss, reduction, accumulate_over_epoch, force_cpu, device=device, **kwargs)
         self.evaluator_name = 'ogbg-molpcba'
         self.evaluator = graphproppred.Evaluator(name=self.evaluator_name)
 
@@ -296,8 +295,11 @@ class OGBGROCAUC(MulticlassAccuracy):
 
         pred = outputs[0]
 
-        if len(targets.shape) == 2:
-            targets = targets.squeeze(dim=1)
+        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        if targets.ndim == 1:
+            targets = targets[:, None]
+        if pred.ndim == 1:
+            pred = pred[:, None]
 
         targets = targets.detach().cpu()
         pred = pred.detach().cpu()
@@ -319,14 +321,14 @@ class OGBGROCAUC(MulticlassAccuracy):
         if len(rocauc_list) == 0:
             raise RuntimeError('No positively labeled data available. Cannot compute ROC-AUC.')
 
-        return sum(rocauc_list)/len(rocauc_list)
+        return torch.tensor(sum(rocauc_list)/len(rocauc_list))
 
 
 class OGBGAP(MulticlassAccuracy):
 
     def __init__(self, use_as_loss: bool=False, reduction: str='mean',
-                 accumulate_over_epoch: bool=True, force_cpu: bool=True):
-        super().__init__(use_as_loss, reduction, accumulate_over_epoch, force_cpu)
+                 accumulate_over_epoch: bool=True, force_cpu: bool=True, device: str='cpu', **kwargs):
+        super().__init__(use_as_loss, reduction, accumulate_over_epoch, force_cpu, device=device, **kwargs)
         self.evaluator_name = 'ogbg-molpcba'
         self.evaluator = graphproppred.Evaluator(name=self.evaluator_name)
 
@@ -339,8 +341,11 @@ class OGBGAP(MulticlassAccuracy):
 
         pred = outputs[0]
 
-        if len(targets.shape) == 2:
-            targets = targets.squeeze(dim=1)
+        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        if targets.ndim == 1:
+            targets = targets[:, None]
+        if pred.ndim == 1:
+            pred = pred[:, None]
 
         targets = targets.detach().cpu()
         pred = pred.detach().cpu()
@@ -362,7 +367,7 @@ class OGBGAP(MulticlassAccuracy):
         if len(ap_list) == 0:
             raise RuntimeError('No positively labeled data available. Cannot compute ROC-AUC.')
 
-        return sum(ap_list)/len(ap_list)
+        return torch.tensor(sum(ap_list)/len(ap_list))
 
 
 class OGBGrahPropPredEvaluator(Metric):
@@ -374,8 +379,8 @@ class OGBGrahPropPredEvaluator(Metric):
                  use_nodes_batch_size: bool=False,
                  accumulate_over_time_steps: bool=False,
                  evaluator_name: str=None,
-                 score_name: str=None):
-        super().__init__(use_as_loss, reduction, use_nodes_batch_size, accumulate_over_time_steps)
+                 score_name: str=None, device: str='cpu', **kwargs):
+        super().__init__(use_as_loss, reduction, accumulate_over_epoch=True, force_cpu=True, device=device, **kwargs)
         self.evaluator_name = evaluator_name
         self.score_name = score_name
         self.evaluator = graphproppred.Evaluator(name=evaluator_name)
@@ -385,8 +390,11 @@ class OGBGrahPropPredEvaluator(Metric):
 
         pred = outputs[0]
 
-        if len(targets.shape) == 2:
-            targets = targets.squeeze(dim=1)
+        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        if targets.ndim == 1:
+            targets = targets[:, None]
+        if pred.ndim == 1:
+            pred = pred[:, None]
 
         # print(self.evaluator.expected_input_format)
         # print(self.evaluator.expected_output_format)
@@ -427,7 +435,7 @@ class DotProductLink(Metric):
         Uses node embeddings (outputs[1]) aand positive/negative edges
         (contained in targets by means of
         e.g.,
-        a :obj:`~pydgn.data.provider.LinkPredictionSingleGraphDataProvider`)
+        a :obj:`~mlwiz.data.provider.LinkPredictionSingleGraphDataProvider`)
         to return logits and target labels of an edge classification task.
         Args:
             targets (:class:`torch.Tensor`): ground truth
@@ -485,7 +493,7 @@ class DotProductAccuracy(Metric):
         Uses node embeddings (outputs[1]) aand positive/negative edges
         (contained in targets by means of
         e.g.,
-        a :obj:`~pydgn.data.provider.LinkPredictionSingleGraphDataProvider`)
+        a :obj:`~mlwiz.data.provider.LinkPredictionSingleGraphDataProvider`)
         to return logits and target labels of an edge classification task.
         Args:
             targets (:class:`torch.Tensor`): ground truth
@@ -553,7 +561,8 @@ class DGILoss(Metric):
                 (default: :obj:`True`)
         """
         summary = summary.t() if summary.dim() > 1 else summary
-        value = torch.matmul(z, summary)
+        # GSPN-GPT-FIXED: Score each node against its own graph summary, not every node.
+        value = (z * summary.t()).sum(-1)
         return torch.sigmoid(value) if sigmoid else value
 
     def get_predictions_and_targets(self, targets: torch.Tensor, *outputs: List[torch.Tensor]) -> Tuple[

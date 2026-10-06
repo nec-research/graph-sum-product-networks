@@ -15,84 +15,95 @@ Please consider citing us if you find the code and paper useful:
       year={2024},
     }
 
-## Requirements
+<!-- GSPN-GPT-FIXED: MLWiz reproduction workflow and mathematical corrections. -->
+## Environment
 
-An environment with [PyTorch](https://pytorch.org/get-started/locally/) (>=2.0.0), [PytorchGeometric](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html) (>=2.3.0) and [PyDGN](https://github.com/diningphil/PyDGN/tree/main) (==1.5.0) installed.
+This checkout uses **MLWiz 1.7.6**, Python 3.11 or 3.12, PyTorch, PyG, and OGB. Install [uv](https://docs.astral.sh/uv/) and run from this directory:
 
-You can install PyDGN using `pip install pydgn==1.5.0`
+```sh
+uv sync --frozen
+uv run pytest
+```
 
-# How to reproduce the results
+The lockfile records the full environment. Research YAMLs retain their original CUDA resource settings; edit the `resources` group for your machine. The combined embedding pipeline uses one device per run; MLWiz can parallelize independent configurations and folds. Optional notebook dependencies are installed with `uv sync --frozen --extra analysis`; launch notebooks with `uv run --extra analysis jupyter lab`.
 
-Remove the `--debug` option to run experiments in parallel. Please refer to the
-[PyDGN tutorial](https://pydgn.readthedocs.io/en/latest/tutorial.html) for an in-depth explanation.
+## Prepare data and preserve splits
 
-## Scarce supervision Experiments
+The data adapters reuse the original raw graph loaders and ordering. Existing `DATA_SPLITS` files remain unchanged. `mlwiz-data` creates MLWiz dataset metadata and converts the configured saved split automatically, validating index bounds, duplicates, partition separation, and containment in the non-test pool. Inner folds are drawn from outer training **plus validation**, matching both frameworks' nested evaluation convention. Missing legacy artifacts cause an error; OGB datasets without a supplied legacy artifact use their official partitions.
 
-### Prepare data (e.g., for benzene)
+```sh
+uv run mlwiz-data --config-file DATA_CONFIGS/config_NCI1.yml
+uv run gspn-convert-splits --config-file DATA_CONFIGS/config_NCI1.yml
+```
 
-    pydgn-dataset --config-file DATA_CONFIGS/config_benzene.yml
+The second command revalidates an existing conversion against the prepared dataset and is idempotent. Converted partitions live in `DATA_SPLITS_MLWIZ`, with source checksums and dataset bounds in adjacent provenance JSON. The conversion command can also take `--source`, `--destination`, and `--dataset-size` for a single artifact. Always supply the actual size when available. Training providers validate loaded partitions again, including files reused by `mlwiz-data`.
 
-Run the same command for different data configuration files to create the datasets.
+Dataset storage roots identify the dataset and processing variant. A processing fingerprint separates incompatible cached samples. Run the matching data configuration before training; OGB baselines have distinct raw-feature adapter configurations, while GSPN retains the original compact categorical encoding.
 
-### Launch Exp (e.g., for benzene)
+## Train models
 
-First, build unsupervised embeddings
+Graph classification from unsupervised embeddings is now one command:
 
-    pydgn-train  --config-file WEAK_SUP_MODEL_CONFIGS/unsup_model_embedding_generation_categorical.yml --debug
+```sh
+uv run mlwiz-exp --config-file MODEL_CONFIGS/unsup_model_embedding_classification_CHEMICAL.yml --debug
+```
 
-Then, train a classifier on top of them
+The experiment trains the encoder on the full inner training fold, extracts deterministic training/validation embeddings, and trains the predictor. It never reads outer-test samples during model selection. Final assessment trains a new encoder on outer training data, uses outer validation for stopping, then extracts embeddings and evaluates the predictor on the entire outer test set. Scarce-supervision fractions affect predictor training/validation only. Cached embeddings include sample IDs and are keyed by exact partition order, dataset checksum, transforms, encoder configuration, seed, code fingerprint, and dependency versions.
 
-    pydgn-train  --config-file WEAK_SUP_MODEL_CONFIGS/unsup_model_embedding_regression_mlp_weak_supervision.yml --debug
+Supervised graph classification:
 
-Modify the configuration files accordingly (`dataset_name` and `data_splits_file` fields) to run experiments on different datasets. Note that
-OGBG-molpcba has different configuration files (`unsup_model_embedding_generation_multicategorical.yml` and `unsup_model_embedding_regression_mlp_weak_supervision_ogbg.yml`).
+```sh
+uv run mlwiz-exp --config-file MODEL_CONFIGS/sup_model_embedding_classification_CHEMICAL.yml --debug
+```
 
-## Graph Classification Experiments
+Scarce supervision with GSPN:
 
-### Prepare data (e.g., for NCI1)
+```sh
+uv run mlwiz-data --config-file DATA_CONFIGS/config_benzene.yml
+uv run mlwiz-exp --config-file WEAK_SUP_MODEL_CONFIGS/unsup_model_embedding_regression_mlp_weak_supervision.yml --debug
+```
 
-    pydgn-dataset --config-file DATA_CONFIGS/config_NCI1.yml
+For GAE or DGI on OGB, prepare the corresponding `config_ogbg-molpcba_OGBGDatasetInterface.yml` in `DATA_CONFIGS` or `DGI_DATA_CONFIGS`. DGI evaluation corruption is deterministic. Encoder-only YAMLs remain available for standalone likelihood experiments; predictor pipelines generate their own embeddings automatically.
 
+Missing continuous features:
 
-Run the same command for different data configuration files to create the datasets.
+```sh
+uv run mlwiz-data --config-file DATA_CONFIGS/config_benzene_missing_data.yml
+uv run mlwiz-exp --config-file MODEL_CONFIGS/missing_gaussian_molecular.yml --debug
+```
 
-### Launch Exp (e.g., for NCI1)
+Missing-data and synthetic datasets still require raw data generated by the original notebook. Remove `--debug` for MLWiz's parallel search. No full research searches are run as part of verification.
 
-#### Unsupervised GSPN
+## Implemented corrections and interfaces
 
-First, build unsupervised embeddings
+Code changes carry `# GSPN-GPT-FIXED` with an explanation. The implementation now marginalizes missing categorical and Gaussian evidence, combines multi-categorical features within a shared mixture component, computes posteriors in log space, and imputes with posterior weights. Categorical imputation returns probabilities; multi-categorical output concatenates one normalized block per feature. One-hot categorical observations must be masked as a whole; integer categorical features can be masked independently.
 
-    pydgn-train  --config-file MODEL_CONFIGS/unsup_model_embedding_generation_categorical.yml --debug
+Shortcuts use preceding layers. Gaussian shortcuts combine variances according to the distribution of an average, rather than averaging standard deviations. Gaussian K-means uses observed training evidence only and honors `init_max_variance`; small batches repeat fitted centers without changing the configured mixture count.
 
+MLWiz models accept `(dim_input_features, dim_target, config)`, with graph dimensions `(node_width, edge_width)`. Dataset samples are `(graph, target)`. The standard engine returns six metric dictionaries; the pipeline extracts node embeddings explicitly. Model outputs remain `(predictions, node_embeddings, extras)`. The first nine extra positions keep their meanings:
 
-Then, train a classifier on top of them
+| Index | Value |
+| --- | --- |
+| 0–1 | Node and optional graph log likelihood |
+| 2–3 | Original input features |
+| 4 | Posterior imputation means/probabilities |
+| 5–6 | Missing and observed masks, or `None` without a mask |
+| 7–8 | Final prior mixture weights and emission parameters |
+| 9 | Conditional missing-feature log likelihood under the same final mixture |
 
-    pydgn-train  --config-file MODEL_CONFIGS/unsup_model_embedding_classification_CHEMICAL.yml --debug
+Conditional likelihood is complete minus observed log likelihood. Missing ground truth is excluded from evaluation; an unavailable conditional score is `NaN`, and missing-feature metrics skip it. Completely missing evidence has zero log likelihood and preserves the prior as posterior.
 
-#### Supervised GSPN
+Existing PyDGN checkpoints and embedding caches need regeneration. Outputs use new MLWiz roots and dataset/configuration-specific experiment names; original data and splits are preserved. Analysis notebooks load current final-run artifacts through `notebook_utils.load_run`, and their historical outputs have been cleared. Two configurations referencing absent original modules/classes are retained as `.yml.disabled` files under `ARCHIVED_CONFIGS`; arbitrary SPN templates and Bernoulli extensions are outside this migration.
 
-    pydgn-train  --config-file MODEL_CONFIGS/sup_model_embedding_classification_CHEMICAL.yml --debug
+## Verification
 
+These deterministic CPU commands require no scientific dataset downloads. Their scores are smoke-test values, not paper results:
 
-Modify the configuration files accordingly (`dataset_name` and `data_splits_file` fields) to run experiments on different datasets.
+```sh
+uv run mlwiz-data --config-file configs/smoke_data.yml
+uv run mlwiz-exp --config-file configs/smoke_supervised.yml --debug
+uv run mlwiz-exp --config-file configs/smoke_pipeline.yml --debug
+uv run pytest
+```
 
-## Missing Data Experiments
-
-### Prepare data (e.g., for benzene)
-
-Run the first part of the `Dataset Creation and Model Analysis` notebook using jupyter to generate the raw dataset.
-
-Then
-
-    pydgn-dataset --config-file DATA_CONFIGS/config_benzene_missing_data.yml
-
-### Launch Exp (e.g., for benzene)
-
-    pydgn-train  --config-file MODEL_CONFIGS/missing_gaussian_molecular.yml --debug
-
-Modify the configuration files accordingly (`dataset_name` and `data_splits_file` fields) to run experiments on different datasets.
-
-## Remarks
-
-Once more, these commands show how to run experiments for GPSN, but not all of them. By easily changing the path of the configuration files, you can run all experiments (please have a look at the folders)
-and reproduce the results for all baselines and datasets.
+Tests cover analytic likelihoods, masking and input preservation, posterior imputation, shortcuts, gradients, initialization, configuration resolution, exact split conversion, cache invalidation/order, and test-blind pipeline execution. Custom experiments and providers are expected static-audit warnings; their partition and lifecycle behavior is exercised by integration tests.

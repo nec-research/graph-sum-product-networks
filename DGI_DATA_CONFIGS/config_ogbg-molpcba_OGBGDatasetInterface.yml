@@ -1,0 +1,31 @@
+# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
+splitter:
+  splits_folder: DATA_SPLITS_MLWIZ/ogbg-molpcba_dgi
+  class_name: migration.PreservedSplitter
+  args:
+    n_outer_folds: 1
+    n_inner_folds: 1
+    seed: 42
+    stratify: false
+    shuffle: true
+    inner_val_ratio: 0.0
+    outer_val_ratio: 0.0
+    test_ratio: 0.0
+    legacy_splits_file: DATA_SPLITS/CHEMICAL/ogbg-molpcba/ogbg-molpcba_outer1_inner1.splits
+dataset:
+  class_name: dataset.OGBGDatasetInterface
+  args:
+    root: DATA
+    name: ogbg-molpcba
+    storage_folder: DATA_MLWIZ/ogbg-molpcba_dgi_OGBGDatasetInterface
+    seed: 42
+    transform_train:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.DGICorruption
+    transform_eval:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.DGICorruption

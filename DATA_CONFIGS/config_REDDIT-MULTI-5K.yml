@@ -1,22 +1,35 @@
+# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
 splitter:
-  root: DATA_SPLITS/COLLABORATIVE_DEGREE
-  class_name: pydgn.data.splitter.Splitter
+  splits_folder: DATA_SPLITS_MLWIZ/REDDIT-MULTI-5K
+  class_name: migration.PreservedSplitter
   args:
     n_outer_folds: 10
     n_inner_folds: 1
     seed: 42
-    stratify: True  # works for graph classification tasks
-    shuffle: True
+    stratify: true
+    shuffle: true
     inner_val_ratio: 0.1
     outer_val_ratio: 0.1
     test_ratio: 0.1
+    legacy_splits_file: DATA_SPLITS/COLLABORATIVE_DEGREE/REDDIT-MULTI-5K/REDDIT-MULTI-5K_outer10_inner1.splits
 dataset:
-  root: DATA
-  class_name: pydgn.data.dataset.TUDatasetInterface
+  class_name: dataset.TUDatasetInterface
   args:
     root: DATA
     name: REDDIT-MULTI-5K
-  transform:
-    - class_name: pydgn.data.transform.Degree
+    storage_folder: DATA_MLWIZ/REDDIT-MULTI-5K
+    seed: 42
+    transform_train:
+      class_name: transform.Compose
       args:
-        in_degree: True  # does not make a difference with undirected graphs
+        transforms:
+        - class_name: transform.Degree
+          args:
+            in_degree: true
+    transform_eval:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.Degree
+          args:
+            in_degree: true

@@ -1,20 +1,31 @@
+# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
 splitter:
-  root: DATA_SPLITS/CHEMICAL
-  class_name: pydgn.data.splitter.Splitter
+  splits_folder: DATA_SPLITS_MLWIZ/ethanol_dgi
+  class_name: migration.PreservedSplitter
   args:
     n_outer_folds: 1
     n_inner_folds: 1
     seed: 42
-    stratify: False
-    shuffle: True
+    stratify: false
+    shuffle: true
     inner_val_ratio: 0.1
     outer_val_ratio: 0.1
     test_ratio: 0.1
+    legacy_splits_file: DATA_SPLITS/CHEMICAL/ethanol/ethanol_outer1_inner1.splits
 dataset:
-  root: DATA
-  class_name: pydgn.data.dataset.TUDatasetInterface
+  class_name: dataset.TUDatasetInterface
   args:
     root: DATA
     name: ethanol
-  transform:
-    - class_name: transform.DGICorruption
+    storage_folder: DATA_MLWIZ/ethanol_dgi
+    seed: 42
+    transform_train:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.DGICorruption
+    transform_eval:
+      class_name: transform.Compose
+      args:
+        transforms:
+        - class_name: transform.DGICorruption

@@ -1,0 +1,35 @@
+# GSPN-GPT-FIXED: Reproducible MLWiz environment; keep the original flat modules.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graph-sum-product-networks"
+version = "0.2.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "mlwiz==1.7.6",
+    "ogb>=1.3.6",
+    "numpy",
+    "scikit-learn",
+    "PyYAML",
+]
+
+[project.optional-dependencies]
+analysis = ["matplotlib", "seaborn", "jupyterlab", "rdkit", "cairosvg", "svglib", "reportlab"]
+
+[project.scripts]
+gspn-convert-splits = "migration:main"
+
+[tool.setuptools]
+py-modules = ["model", "sup_model", "dataset", "provider", "transform", "readout", "metric", "optimizer", "baselines", "baseline_mask", "pipeline", "migration", "notebook_utils", "unsupervised_embedding_generation", "unsupervised_embedding_classification", "supervised_embedding_classification", "weakly_supervised_task"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

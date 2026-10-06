@@ -145,212 +145,38 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-from typing import Tuple, Optional, List
+
+# GSPN-GPT-FIXED: Reuse masked, stable GSPN inference and retain Eq. 5 graph pooling.
 import torch
-import torch.nn as nn
-from pydgn.model.interface import ModelInterface
-from torch import softmax
-from torch.nn import Linear
-from torch_geometric.data import Batch
-from torch_geometric.nn import global_mean_pool, global_add_pool
+from torch import nn
+from torch_geometric.nn import global_add_pool, global_mean_pool
 
-from pydgn.experiment.util import s2c
+from model import GSPN
 
-class SupGSPN(ModelInterface):
-    """
-    Graph Sum-Product Network (supervised)
-    """
-    def __init__(
-        self, dim_node_features, dim_edge_features, dim_target, readout_class, config
-    ):
-        """
-        Initializes the Graph Sum-Product Network
-        :param dim_node_features:
-        :param dim_edge_features:
-        :param dim_target:
-        :param readout_class:
-        :param config:
-        """
-        super().__init__(
-            dim_node_features, dim_edge_features, dim_target, readout_class, config
-        )
 
-        self.num_layers = config["num_layers"]
-        self.num_mixtures = config["num_mixtures"]
-        self.num_graph_mixtures = config.get("num_graph_mixtures", None)
-        self.num_hidden_neurons = config[
-            "num_hidden_neurons"
-        ]  # same number of hidden neurons for all MLPs involved
-        self.convolution_class = s2c(config["convolution_class"])
-        self.emission_class = s2c(config["emission_class"])
-        self.emissions = nn.ModuleList()
-        self.transitions = nn.ModuleList()
-        self.avg_parameters_across_layers = config.get('avg_parameters_across_layers', True)
-        self.use_kmeans = config.get('init_kmeans', False)
-
-        self.global_readout = config['global_readout']
-
-        for id_layer in range(self.num_layers):
-            self.emissions.append(
-                self.emission_class(
-                    self.dim_node_features, self.num_mixtures, self.num_hidden_neurons
-                )
-            )
-            self.transitions.append(
-                self.convolution_class(
-                    dim_edge_features,
-                    self.num_mixtures,
-                    self.num_hidden_neurons,
-                    use_prior=id_layer == 0,
-                )
-            )
-
+class SupGSPN(GSPN):
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, {**config, "readout": None})
+        self.num_graph_mixtures = config.get("num_graph_mixtures")
+        self.global_readout = config.get("global_readout", "mean")
+        if self.global_readout not in ("sum", "mean"):
+            raise ValueError("global_readout must be sum or mean")
         if self.num_graph_mixtures is not None:
-            """
-            THIS IS THE SUPERVISED VERSION OF THE MODEL
-            """
-            self.readout_node = torch.nn.Parameter(torch.rand(self.num_mixtures*self.num_layers,
-                                                              self.num_graph_mixtures),
-                                                   requires_grad=True)
-            self.readout_graph = Linear(self.num_graph_mixtures,
-                                             dim_target, bias=False)
-
-    def forward(
-        self, data: Batch
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
-        """
-
-        :param data:
-        :return:
-        """
-        # extract data
-        x, edge_index, edge_attr, batch = (
-            data.x,
-            data.edge_index,
-            data.edge_attr,
-            data.batch,
-        )
-
-        # if self.add_self_loops:
-        #     edge_index = add_self_loops(edge_index)[0]
-        #
-        # if self.training and self.use_kmeans:
-        #     if not self.initialized:
-        #         print("Initializing kmeans...")
-        #         self.kmeans.fit(x.detach().cpu().numpy())
-        #         clusters = torch.tensor(self.kmeans.cluster_centers_)
-        #         mu = (clusters + torch.randn_like(clusters)).to(x.device)
-        #         for id_layer in range(self.num_layers):
-        #             self.emissions[id_layer].initialize_means(mu)
-        #         self.initialized.data = torch.tensor(True)
-        #         print("Done.")
-
-        node_posterior_layer = []  # list of one node embedding matrix per layer
-        params_v_layer = []
-
-        h_v = None
-        for id_layer in range(self.num_layers):
-            mixture_weights = self.transitions[id_layer].forward(
-                edge_index, edge_attr, h_v=h_v, batch_size=x.shape[0]
+            self.readout_node = nn.Parameter(
+                torch.rand(self.num_mixtures * self.num_layers, self.num_graph_mixtures)
             )
+            self.readout_graph = nn.Linear(self.num_graph_mixtures, dim_target, bias=False)
 
-            if id_layer > 0:
-                mixture_weights_j = mixture_weights.reshape(
-                    (-1, self.num_mixtures, self.num_mixtures)
-                )
-                # i.e., \sum_j P(i|j)*q_v(j), where u is v's neighboring node. Note: this does not depend on node v.
-                mixture_weights = mixture_weights_j.sum(2)
-
-            params_v, log_likelihood_v, log_likelihood_v_comp, imputed_values = self.emissions[
-                id_layer
-            ].forward(data.x, mixture_weights)
-            params_v_layer.append(params_v)
-
-            if id_layer == 0:
-                # Compute the node "posterior"
-                unnormalized_posterior = (
-                    mixture_weights * log_likelihood_v_comp.exp() + 1e-8
-                )
-                node_posterior = unnormalized_posterior / unnormalized_posterior.sum(
-                    1, keepdim=True
-                )
-
-                # Pass "posterior" to next layers
-                h_v = node_posterior
-                node_posterior_layer.append(h_v)
-                assert not torch.any(torch.isnan(log_likelihood_v_comp))
-                assert not torch.any(torch.isnan(mixture_weights))
-                assert not torch.any(torch.isnan(unnormalized_posterior))
-                assert not torch.any(torch.isnan(node_posterior))
-
-                avg_params_across_layers = params_v_layer[0]
-
-            else:
-                # We "generate" using the last mixing weights, but the emission parameters have been avg. across layers
-                if id_layer == self.num_layers - 1:
-
-                    if self.avg_parameters_across_layers:
-                        # The individual layers jointly cooperate towards the generation of node features.
-                        avg_params_across_layers = self.emissions[
-                            id_layer
-                        ].average_parameters(params_v_layer)
-
-                        log_likelihood_v, log_likelihood_v_comp = self.emissions[
-                            id_layer
-                        ].log_likelihood(x, mixture_weights, avg_params_across_layers)
-
-                        imputed_values = self.emissions[id_layer].impute(avg_params_across_layers, mixture_weights)
-
-                    else:
-                        avg_params_across_layers = params_v_layer[-1]
-
-                        log_likelihood_v, log_likelihood_v_comp = self.emissions[
-                            id_layer
-                        ].log_likelihood(x, mixture_weights, params_v)
-
-                # Compute the deterministic "posterior" for unsupervised node embeddings
-                log_likelihood_v_comp_unsqueezed = log_likelihood_v_comp.unsqueeze(2)
-                unnormalized_posterior = (
-                    mixture_weights_j * log_likelihood_v_comp_unsqueezed.exp() + 1e-8
-                )
-                node_posterior = unnormalized_posterior / unnormalized_posterior.sum(
-                    (1, 2), keepdim=True
-                )
-
-                # Pass "posterior" to next layers
-                h_v = node_posterior.sum(2)
-                node_posterior_layer.append(h_v)
-
-        objective_v = log_likelihood_v  # this refers to the last layer, in which we average all parameters
-
-        # node posteriors of all layers, interpreted as node embeddings
-        node_posterior_layer = torch.stack(node_posterior_layer, dim=1)
-
-        preds_g, objective_g = None, None
+    def forward(self, data):
+        _, embeddings, extras = super().forward(data)
+        predictions = None
         if self.num_graph_mixtures is not None:
-            """
-            SUPERVISED VERSION
-            """
-            norm_table = softmax(self.readout_node + 1e-8, dim=1)
-            node_embs = (node_posterior_layer.reshape(-1, self.num_layers * self.num_mixtures))
-            tmp_node = torch.matmul(node_embs, norm_table)
-
-            if self.global_readout == 'sum':
-                tmp_graph = softmax(global_add_pool(tmp_node, batch) + 1e-8, dim=1)
-            else:
-                tmp_graph = global_mean_pool(tmp_node, batch)/self.num_layers
-
-
-            preds_g = self.readout_graph(tmp_graph)
-            objective_g = None
-
-        return (
-            preds_g,
-            node_posterior_layer.reshape(
-                (
-                    node_posterior_layer.shape[0],
-                    node_posterior_layer.shape[1] * node_posterior_layer.shape[2],
-                )
-            ),
-            [objective_v, objective_g, x, x, imputed_values, None, None, mixture_weights, avg_params_across_layers],
-        )
+            table = torch.softmax(self.readout_node, dim=1)
+            local = embeddings @ table
+            pooled = (
+                torch.softmax(global_add_pool(local, data.batch), dim=1)
+                if self.global_readout == "sum"
+                else global_mean_pool(local, data.batch) / self.num_layers
+            )
+            predictions = self.readout_graph(pooled)
+        return predictions, embeddings, extras

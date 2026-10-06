@@ -145,31 +145,8 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-import math
-import os
+# GSPN-GPT-FIXED: Standard MLWiz supervised lifecycle replaces the PyDGN task.
+from mlwiz.experiment import Experiment
 
-import torch
-from pydgn.experiment.supervised_task import SupervisedTask
-from pydgn.static import LOSS, SCORE
-
-from torch_geometric.data import Data, Batch
-from torch_geometric.loader import DataLoader
-
-
-class ClassificationTask(SupervisedTask):
-
-    def run_valid(self, dataset_getter, logger):
-        """
-        This function returns the training and validation or test accuracy
-        :return: (training accuracy, validation/test accuracy)
-        """
-        weak_supervision_percentage = self.model_config.get('weak_supervision_percentage', 1.)
-        return super().run_valid(dataset_getter, logger)
-
-    def run_test(self, dataset_getter, logger):
-        """
-        This function returns the training and test accuracy. DO NOT USE THE TEST FOR ANY REASON
-        :return: (training accuracy, test accuracy)
-        """
-        weak_supervision_percentage = self.model_config.get('weak_supervision_percentage', 1.)
-        return super().run_test(dataset_getter, logger)
+class ClassificationTask(Experiment):
+    pass

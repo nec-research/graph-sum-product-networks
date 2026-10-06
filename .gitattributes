@@ -1,0 +1,2 @@
+# GSPN-GPT-FIXED: Existing source licenses use CRLF; treat CR as a line ending in checks.
+*.py whitespace=trailing-space,space-before-tab,cr-at-eol
