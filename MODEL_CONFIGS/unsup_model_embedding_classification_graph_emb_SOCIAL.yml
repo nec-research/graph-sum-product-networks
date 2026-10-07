@@ -1,5 +1,3 @@
-# GSPN-GPT-FIXED: Canonical GSPN paths/settings; fresh result name avoids old checkpoints.
-# GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
 dataset:
   storage_folder: DATA_MLWIZ/COLLAB
   dataset_class: dataset.TUDatasetInterface

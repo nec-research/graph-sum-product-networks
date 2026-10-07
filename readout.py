@@ -146,8 +146,7 @@ arrangements between the parties relating hereto.
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
 
-# GSPN-GPT-FIXED: Keep graph predictors here; GSPN heads now live exclusively in model.py.
-# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
+# Keep graph predictors here; GSPN heads now live exclusively in model.py.
 
 import torch
 import torch.nn.functional as F
@@ -157,25 +156,21 @@ from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_poo
 from model import graph_dimensions
 
 
-# GSPN-GPT-FIXED: Resolve predictor pooling once while retaining the existing failure behavior.
 def _predictor_pooling(name):
+    """Resolve sum/mean/max pooling, rejecting unsupported predictor settings."""
     if name not in ("sum", "mean", "max"):
         raise NotImplementedError("Global pooling operator not recognized")
     return {"sum": global_add_pool, "mean": global_mean_pool, "max": global_max_pool}[name]
 
 
 class LinearGraphClassifier_GlobalReadout(ModelInterface):
-    """
-    This MLP computes a prediction starting from node embeddings
-    """
+    """Classify graphs from pooled node embeddings."""
 
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        # GSPN-GPT-FIXED: All embedding predictors share the same pooling selection.
         self.global_pooling = _predictor_pooling(config["global_pooling"])
 
         self.out = torch.nn.Linear(dim_node_features, dim_target)
@@ -185,23 +180,18 @@ class LinearGraphClassifier_GlobalReadout(ModelInterface):
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
         graph_embeddings = self.global_pooling(node_embeddings, batch)
-        # GSPN-GPT-FIXED: Name tensors by their role without changing returned embeddings.
         predictions = self.out(graph_embeddings)
         return predictions, graph_embeddings
 
 
 class MLPGraphClassifier_GlobalReadout(ModelInterface):
-    """
-    This MLP computes a prediction starting from node embeddings
-    """
+    """Classify graphs from pooled node embeddings."""
 
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        # GSPN-GPT-FIXED: All embedding predictors share the same pooling selection.
         self.global_pooling = _predictor_pooling(config["global_pooling"])
 
         hidden_units = config["hidden_units"]
@@ -214,7 +204,6 @@ class MLPGraphClassifier_GlobalReadout(ModelInterface):
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
 
-        # GSPN-GPT-FIXED: Descriptive names preserve the local/pooling/global operation order.
         node_representations = torch.relu(self.fc_local(node_embeddings))
         graph_embeddings = self.global_pooling(node_representations, batch)
         graph_representations = self.fc_global(graph_embeddings)
@@ -223,17 +212,13 @@ class MLPGraphClassifier_GlobalReadout(ModelInterface):
 
 
 class MLPGraphClassifier_GraphEmbedding(ModelInterface):
-    """
-    This MLP computes a prediction starting from graph embeddings, without transforming the node embeddings
-    """
+    """Pool unchanged node embeddings, then apply the graph classifier MLP."""
 
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        # GSPN-GPT-FIXED: All embedding predictors share the same pooling selection.
         self.global_pooling = _predictor_pooling(config["global_pooling"])
 
         hidden_units = config["hidden_units"]
@@ -245,7 +230,6 @@ class MLPGraphClassifier_GraphEmbedding(ModelInterface):
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
 
-        # GSPN-GPT-FIXED: Keep pooled embeddings distinct from transformed graph representations.
         graph_embeddings = self.global_pooling(node_embeddings, batch)
         graph_representations = self.fc_global(graph_embeddings)
         predictions = self.out(F.relu(graph_representations))

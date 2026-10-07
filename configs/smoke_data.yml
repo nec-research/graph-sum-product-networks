@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Tiny CPU smoke test; scores are not scientific results.
+# Tiny CPU smoke test; scores are not scientific results.
 dataset:
   class_name: dataset.SmokeGraphDataset
   args:

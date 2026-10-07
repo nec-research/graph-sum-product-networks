@@ -145,7 +145,6 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from typing import Tuple, Optional, List
 
 import torch
@@ -162,7 +161,6 @@ from torch_geometric.nn.inits import reset, uniform
 
 
 class GIN(ModelInterface):
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
@@ -234,7 +232,6 @@ class GAE_Adj(ModelInterface):
     """
     Original GAE that reconstructs the adjacency matrix to produce latent node representations
     """
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
@@ -314,7 +311,6 @@ class DGI(ModelInterface):
     """
     Original DGI. Code taken and adapted from PyG
     """
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)

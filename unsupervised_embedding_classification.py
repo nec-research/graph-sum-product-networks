@@ -145,7 +145,7 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Encoder and predictor are trained by one fold-aware MLWiz pipeline.
+# Encoder and predictor are trained by one fold-aware MLWiz pipeline.
 from pipeline import EmbeddingPipeline
 
 class ClassificationTask(EmbeddingPipeline):

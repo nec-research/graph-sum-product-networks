@@ -145,7 +145,7 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Restrict labels through the provider while MLWiz owns evaluation.
+# Restrict labels through the provider while MLWiz owns evaluation.
 from mlwiz.experiment import Experiment
 
 class WeaklySupervisedTask(Experiment):

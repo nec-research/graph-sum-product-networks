@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: One MLWiz experiment owns both stages and keeps outer test blind.
+# One MLWiz experiment owns both stages and keeps outer test blind.
 import hashlib
 import importlib.metadata
 import json
@@ -16,12 +16,13 @@ from migration import sha256
 
 
 def code_fingerprint():
+    """Hash top-level Python modules to invalidate embeddings after implementation changes."""
     files = sorted(Path(__file__).parent.glob("*.py"))
     return hashlib.sha256("".join(p.name + sha256(p) for p in files).encode()).hexdigest()
 
 
 def cache_identity(dataset, indices, config, seed, mode):
-    # GSPN-GPT-FIXED: Fold, evidence, configuration, implementation, and versions key reuse.
+    """Return encoder/data provenance and a hash including exact partition order."""
     path = getattr(dataset, "dataset_filepath", None)
     dataset_identity = {
         "class": type(dataset).__module__ + "." + type(dataset).__name__,
@@ -50,13 +51,14 @@ def cache_identity(dataset, indices, config, seed, mode):
 
 
 def _transform_spec(dataset, name):
+    """Serialize transform settings for embedding cache invalidation."""
     from dataset import transform_identity
 
     return transform_identity(getattr(dataset, name, None))
 
 
 def extract_embeddings(model, loader, device, should_terminate=None, deadline=None):
-    # GSPN-GPT-FIXED: Explicit deterministic inference replaces PyDGN's removed data-list return.
+    """Extract node embeddings in loader order, retaining graph IDs and targets on CPU."""
     result = []
     model.eval()
     with torch.no_grad():
@@ -75,6 +77,7 @@ def extract_embeddings(model, loader, device, should_terminate=None, deadline=No
 
 
 def check_stop(should_terminate, deadline):
+    """Enforce cancellation and the shared deadline before continuing a pipeline stage."""
     if should_terminate is not None and should_terminate():
         from mlwiz.experiment.experiment import ExperimentTerminated
 
@@ -84,8 +87,10 @@ def check_stop(should_terminate, deadline):
 
 
 class EmbeddingPipeline(Experiment):
-    # GSPN-GPT-FIXED: Make shared/stage/enforced precedence explicit without mutating settings.
+    """Train an encoder and predictor with separate inner-selection and outer-assessment caches."""
+
     def _stage_config(self, key):
+        """Merge shared and stage settings, then enforce the experiment seed and checkpoints."""
         shared = {
             name: value
             for name, value in self.model_config.items()
@@ -107,6 +112,7 @@ class EmbeddingPipeline(Experiment):
         progress_callback,
         should_terminate,
     ):
+        """Train one stage with the remaining shared time budget and forwarded callbacks."""
         check_stop(should_terminate, deadline)
         stage = Experiment(config, str(Path(self.exp_path) / name), self.exp_seed)
         model = stage.create_model(dims, target_dim, stage.model_config)
@@ -126,6 +132,7 @@ class EmbeddingPipeline(Experiment):
         return model, metrics
 
     def _partitions(self, provider, final):
+        """Return ordered inner partitions for selection or outer partitions for assessment."""
         splitter = provider._get_splitter()
         if final:
             fold = splitter.outer_folds[provider.outer_k]
@@ -137,7 +144,6 @@ class EmbeddingPipeline(Experiment):
         fold = splitter.inner_folds[provider.outer_k][provider.inner_k]
         return {"train": list(fold.train_idxs), "validation": list(fold.val_idxs)}
 
-    # GSPN-GPT-FIXED: Keep cache provenance, encoder training, and extraction in one focused stage.
     def _load_or_create_embeddings(
         self,
         dataset_getter,
@@ -150,6 +156,7 @@ class EmbeddingPipeline(Experiment):
         progress_callback,
         should_terminate,
     ):
+        """Reuse matching embeddings or train a partition-specific encoder and extract them."""
         identity, digest = cache_identity(
             dataset, partitions, encoder_config, self.exp_seed, "outer" if final else "inner"
         )
@@ -216,8 +223,8 @@ class EmbeddingPipeline(Experiment):
             )
         return embeddings
 
-    # GSPN-GPT-FIXED: Supervision subsets affect predictor loaders only; test remains complete.
     def _predictor_loaders(self, embeddings, config, fraction):
+        """Restrict training/validation supervision while retaining every test sample."""
         loaders = {}
         for name, samples in embeddings.items():
             selected = samples if name == "test" else samples[: math.floor(len(samples) * fraction)]
@@ -231,7 +238,6 @@ class EmbeddingPipeline(Experiment):
             )
         return loaders
 
-    # GSPN-GPT-FIXED: Show partition choice, embeddings, predictor training, and result packaging.
     def _run_pipeline(
         self,
         dataset_getter,
@@ -243,6 +249,7 @@ class EmbeddingPipeline(Experiment):
         ddp_rank=None,
         ddp_world_size=1,
     ):
+        """Obtain fold-specific embeddings, train the predictor, and package MLWiz metrics."""
         if ddp_world_size != 1:
             raise ValueError(
                 "The embedding pipeline supports one device per run; parallelize folds/configurations with MLWiz"
@@ -286,7 +293,6 @@ class EmbeddingPipeline(Experiment):
         results = [{LOSS: metrics[i], SCORE: metrics[i + 1]} for i in range(0, 6, 2)]
         return tuple(results if final else results[:2])
 
-    # GSPN-GPT-FIXED: Name lifecycle arguments explicitly without altering the MLWiz signature.
     def _run_valid_impl(
         self,
         dataset_getter,
@@ -297,6 +303,7 @@ class EmbeddingPipeline(Experiment):
         ddp_rank=None,
         ddp_world_size=1,
     ):
+        """Run inner-fold model selection without requesting outer-test data."""
         return self._run_pipeline(
             dataset_getter=dataset_getter,
             training_timeout_seconds=training_timeout_seconds,
@@ -308,7 +315,6 @@ class EmbeddingPipeline(Experiment):
             ddp_world_size=ddp_world_size,
         )
 
-    # GSPN-GPT-FIXED: Final assessment forwards the same callbacks and distributed arguments.
     def _run_test_impl(
         self,
         dataset_getter,
@@ -319,6 +325,7 @@ class EmbeddingPipeline(Experiment):
         ddp_rank=None,
         ddp_world_size=1,
     ):
+        """Run outer-fold assessment with the complete test partition."""
         return self._run_pipeline(
             dataset_getter=dataset_getter,
             training_timeout_seconds=training_timeout_seconds,
@@ -333,5 +340,3 @@ class EmbeddingPipeline(Experiment):
 
 class EmbeddingTask(Experiment):
     """Optional encoder-only experiment with honest MLWiz validation and assessment."""
-
-    # GSPN-GPT-FIXED: Remove dummy final scores and premature outer-test extraction.

@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Verify partition provenance, transform isolation, and test-blind orchestration.
+# Verify partition provenance, transform isolation, and test-blind orchestration.
 import copy
 from pathlib import Path
 from types import SimpleNamespace
@@ -158,7 +158,7 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
     original = experiment._train
     stages = []
 
-    # GSPN-GPT-FIXED: The spy accepts the same named training arguments as the pipeline.
+    # The spy accepts the same named training arguments as the pipeline.
     def train(
         config,
         name,
@@ -203,7 +203,7 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
 
     cache = next((tmp_path / "embeddings").rglob("embeddings.pkl"))
     saved = dill_load(str(cache))
-    # GSPN-GPT-FIXED: Extraction retains exact partition order, cache schema, and eval transforms.
+    # Extraction retains exact partition order, cache schema, and eval transforms.
     assert set(saved) == {"identity", "embeddings", "encoder_state"}
     assert {
         name: [int(graph.sample_id) for graph, _ in samples]
@@ -239,7 +239,7 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
     )
     assert key != changed
 
-    # GSPN-GPT-FIXED: A mismatched cache is rejected without accessing or retraining any partition.
+    # A mismatched cache is rejected without accessing or retraining any partition.
     corrupted = copy.deepcopy(saved)
     corrupted["identity"]["seed"] += 1
     atomic_dill_save(corrupted, str(cache))

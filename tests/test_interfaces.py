@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Exercise framework adapters, readouts, and edge-case metrics.
+# Exercise framework adapters, readouts, and edge-case metrics.
 import json
 from pathlib import Path
 
@@ -20,7 +20,7 @@ from metric import (
 )
 from migration import OfficialOGBSplitter, PreservedSplitter
 
-# GSPN-GPT-FIXED: GSPN heads now share the canonical model module and named result interface.
+# GSPN heads now share the canonical model module and named result interface.
 from model import (
     GSPN,
     ProbabilisticGraphReadout,
@@ -182,7 +182,7 @@ def test_unavailable_categorical_truth_is_excluded():
 
 
 def test_synthetic_node_labels_do_not_break_graph_batching(tmp_path):
-    # GSPN-GPT-FIXED: Preserve node-level community labels while batching graph targets.
+    # Preserve node-level community labels while batching graph targets.
     from torch_geometric.data import Data
 
     from dataset import SyntheticDataset

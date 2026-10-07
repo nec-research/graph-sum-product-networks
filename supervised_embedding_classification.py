@@ -145,7 +145,7 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Standard MLWiz supervised lifecycle replaces the PyDGN task.
+# Standard MLWiz supervised lifecycle replaces the PyDGN task.
 from mlwiz.experiment import Experiment
 
 class ClassificationTask(Experiment):

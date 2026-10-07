@@ -145,7 +145,6 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from typing import Tuple, Optional, List, Any
 
 import torch
@@ -164,7 +163,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool, GINConv
 from torch_geometric.utils import degree
 from torch_geometric.utils import scatter
 
-# GSPN-GPT-FIXED: Use PyG/PyTorch scatter to avoid platform-specific extension wheels.
+# Use PyG/PyTorch scatter to avoid platform-specific extension wheels.
 def scatter_sum(src, index, dim=0, dim_size=None):
     return scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum")
 
@@ -186,7 +185,6 @@ class GaussianEmission(nn.Module):
 
 class MeanAggregation(ModelInterface):
 
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
@@ -256,7 +254,6 @@ class GAE(ModelInterface):
     """
     Modified GAE that reconstructs node features rather than structure as in the original paper
     """
-    # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)

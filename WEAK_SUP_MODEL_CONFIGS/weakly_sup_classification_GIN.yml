@@ -1,4 +1,3 @@
-# GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
 dataset:
   storage_folder: DATA_MLWIZ/malonaldehyde_TUDatasetInterfaceRegression
   dataset_class: dataset.TUDatasetInterfaceRegression

@@ -146,7 +146,6 @@ arrangements between the parties relating hereto.
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
 
-# GSPN-GPT-FIXED: Canonical GSPN inference; the superseded implementations are retired.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -162,8 +161,8 @@ from torch_geometric.nn import MessagePassing, global_add_pool, global_mean_pool
 from torch_geometric.utils import add_self_loops, remove_self_loops
 
 
-# GSPN-GPT-FIXED: Retain the dimension helper used by graph baselines and predictor modules.
 def graph_dimensions(dim_input_features):
+    """Return node/edge widths, accepting a scalar node width for compatibility."""
     return (
         tuple(dim_input_features)
         if isinstance(dim_input_features, (tuple, list))
@@ -171,7 +170,7 @@ def graph_dimensions(dim_input_features):
     )
 
 
-# GSPN-GPT-FIXED: Named, normalized distribution parameters hide packed tensor layouts.
+# Named, normalized distribution parameters hide packed tensor layouts.
 @dataclass(frozen=True)
 class CategoricalParameters:
     probabilities: Tensor  # [components, categories]
@@ -200,8 +199,8 @@ class MultiCategoricalParameters:
 DistributionParameters = CategoricalParameters | GaussianParameters | MultiCategoricalParameters
 
 
-# GSPN-GPT-FIXED: One observed-mask convention; broadcasting never mutates inputs.
 def observed_feature_mask(x: Tensor, observed_mask: Tensor | None = None) -> Tensor:
+    """Broadcast node or feature masks; True denotes observed evidence."""
     if observed_mask is None:
         return torch.ones_like(x, dtype=torch.bool)
     mask = observed_mask.to(device=x.device, dtype=torch.bool)
@@ -210,8 +209,8 @@ def observed_feature_mask(x: Tensor, observed_mask: Tensor | None = None) -> Ten
     return torch.broadcast_to(mask, x.shape)
 
 
-# GSPN-GPT-FIXED: Normalize priors once per query, preserving exact zero support.
 def _joint_log_prob(component_log_prob: Tensor, prior: Tensor) -> Tensor:
+    """Combine component log densities with normalized priors, retaining exact zero support."""
     normalized = prior / prior.sum(-1, keepdim=True)
     log_prior = torch.where(
         normalized > 0,
@@ -222,16 +221,19 @@ def _joint_log_prob(component_log_prob: Tensor, prior: Tensor) -> Tensor:
 
 
 def infer_mixture(component_log_prob: Tensor, prior: Tensor) -> tuple[Tensor, Tensor]:
+    """Return marginalized log likelihoods and normalized component posteriors."""
     joint = _joint_log_prob(component_log_prob, prior)
     return torch.logsumexp(joint, dim=-1), torch.softmax(joint, dim=-1)
 
 
 def mixture_log_prob(component_log_prob: Tensor, prior: Tensor) -> Tensor:
+    """Marginalize components without computing posterior weights."""
     return torch.logsumexp(_joint_log_prob(component_log_prob, prior), dim=-1)
 
 
-# GSPN-GPT-FIXED: Emissions describe components; mixture inference belongs to the caller.
 class GSPNEmission(nn.Module, ABC):
+    """Component distributions; callers perform mixture inference and choose predictive weights."""
+
     supports_kmeans = False
 
     def __init__(self, dim_observable: int, num_components: int):
@@ -249,18 +251,22 @@ class GSPNEmission(nn.Module, ABC):
 
     @abstractmethod
     def component_log_prob(self, x, *, params, observed_mask=None) -> Tensor:
+        """Return one log density per sample/component, marginalizing unobserved features."""
         raise NotImplementedError
 
     @abstractmethod
     def predictive_mean(self, params, *, weights) -> Tensor:
+        """Combine component means or category probabilities using the supplied mixture weights."""
         raise NotImplementedError
 
     @abstractmethod
     def combine_shortcut_parameters(self, parameters_per_layer) -> DistributionParameters:
+        """Combine preceding-layer distributions into the final shortcut emission."""
         raise NotImplementedError
 
     @abstractmethod
     def valid_values(self, x) -> Tensor:
+        """Identify usable values when checking hidden ground truth."""
         raise NotImplementedError
 
     def reference_state_mapping(self):
@@ -271,7 +277,7 @@ class GSPNEmission(nn.Module, ABC):
         raise NotImplementedError("This emission does not support Gaussian K-means")
 
 
-# GSPN-GPT-FIXED: A categorical component evaluates evidence without mixing components.
+# A categorical component evaluates evidence without mixing components.
 class GSPNCategoricalEmission(GSPNEmission):
     def __init__(self, num_categories, num_components):
         super().__init__(num_categories, num_components)
@@ -288,6 +294,7 @@ class GSPNCategoricalEmission(GSPNEmission):
         return valid
 
     def component_log_prob(self, x, *, params, observed_mask=None):
+        """Accept integer IDs or whole-variable one-hot evidence; missing variables score zero."""
         observed = observed_feature_mask(x, observed_mask)
         if x.ndim == 2 and x.shape[1] > 1:
             if torch.any(observed.any(1) != observed.all(1)):
@@ -299,7 +306,6 @@ class GSPNCategoricalEmission(GSPNEmission):
             labels = torch.where(available, x.reshape(-1), torch.zeros_like(x.reshape(-1)))
         if torch.any(available & ~self.valid_values(labels)):
             raise ValueError("Observed categorical labels must be valid integer category IDs")
-        # GSPN-GPT-FIXED: Select category probabilities directly without broadcast/gather plumbing.
         components = params.probabilities[:, labels.long()].T.log()
         return torch.where(available[:, None], components, torch.zeros_like(components))
 
@@ -315,7 +321,7 @@ class GSPNCategoricalEmission(GSPNEmission):
         return {"categorical_probs": "category_logits"}
 
 
-# GSPN-GPT-FIXED: Independent feature evidence shares a single latent mixture component.
+# Independent feature evidence shares a single latent mixture component.
 class GSPNMultiCategoricalEmission(GSPNEmission):
     def __init__(self, dim_observable, num_components, categories):
         super().__init__(dim_observable, num_components)
@@ -343,6 +349,7 @@ class GSPNMultiCategoricalEmission(GSPNEmission):
         )
 
     def component_log_prob(self, x, *, params, observed_mask=None):
+        """Sum feature log densities within each component before mixing components."""
         observed = observed_feature_mask(x, observed_mask)
         components = params.blocks[0].probabilities.new_zeros(x.shape[0], self.num_components)
         for i, (emission, block) in enumerate(zip(self.emissions, params.blocks)):
@@ -370,7 +377,7 @@ class GSPNMultiCategoricalEmission(GSPNEmission):
         }
 
 
-# GSPN-GPT-FIXED: Named Gaussian views retain packed trainable state and RNG draw order.
+# Packed Gaussian parameters retain checkpoint layout and initialization draw order.
 class GSPNGaussianEmission(GSPNEmission):
     supports_kmeans = True
 
@@ -405,6 +412,7 @@ class GSPNGaussianEmission(GSPNEmission):
         return (params.mean.unsqueeze(0) * weights[:, :, None]).sum(1)
 
     def combine_shortcut_parameters(self, parameters_per_layer):
+        # Variance of an average of L independent Gaussians is sum(variance) / L².
         count = len(parameters_per_layer)
         return GaussianParameters(
             torch.stack([p.mean for p in parameters_per_layer]).mean(0),
@@ -418,10 +426,11 @@ class GSPNGaussianEmission(GSPNEmission):
         with torch.no_grad():
             self.mean.copy_(centers)
             scale = (torch.rand_like(self.raw_scale) * max_variance).clamp_min(1e-4).sqrt()
+            # Convert the positive standard deviation to its unconstrained parameter.
             self.raw_scale.copy_(scale + torch.log(-torch.expm1(-scale)))
 
 
-# GSPN-GPT-FIXED: Transitions encapsulate pair-component reduction and never edit topology.
+# Transitions encapsulate pair-component reduction and never edit topology.
 class GSPNBaseConv(MessagePassing):
     def __init__(self, num_components, use_prior):
         super().__init__(aggr="mean")
@@ -435,6 +444,7 @@ class GSPNBaseConv(MessagePassing):
         table = torch.softmax(self.transition_logits, dim=0).unsqueeze(0)
         if self.use_prior:
             return table.expand(num_nodes, -1)
+        # Rows index destination components; columns index preceding components.
         weighted = table * previous_posterior.unsqueeze(1)
         aggregated = self.propagate(
             edge_index, x=weighted.reshape(num_nodes, -1), size=(num_nodes, num_nodes)
@@ -445,7 +455,6 @@ class GSPNBaseConv(MessagePassing):
         return {"transition_table": "transition_logits"}
 
 
-# GSPN-GPT-FIXED: Named results replace positional tuples inside the model only.
 @dataclass(frozen=True)
 class Evidence:
     x: Tensor
@@ -492,6 +501,7 @@ class InferenceResult:
         return None if self.graph is None else self.graph.predictions
 
     def to_reference_outputs(self):
+        """Pack predictions, embeddings, and the ten positional auxiliary outputs."""
         final = self.layers[-1]
         observed = self.evidence.observed_mask if self.evidence.has_mask else None
         extras = [
@@ -509,7 +519,7 @@ class InferenceResult:
         return self.predictions, self.embeddings, extras
 
 
-# GSPN-GPT-FIXED: Graph heads predict without targets and score only supplied targets.
+# Graph heads predict without targets and score only supplied targets.
 class GraphHead(nn.Module, ABC):
     @abstractmethod
     def forward(self, node_posteriors, batch, targets=None) -> GraphResult:
@@ -520,12 +530,13 @@ class GraphHead(nn.Module, ABC):
 
 
 def _pooling(name):
+    """Resolve the sum/mean pooling operators supported by GSPN graph heads."""
     if name not in ("sum", "mean"):
         raise ValueError("Graph pooling must be sum or mean")
     return global_add_pool if name == "sum" else global_mean_pool
 
 
-# GSPN-GPT-FIXED: Share probabilistic readout stages while preserving each variant's math.
+# Graph predictions use the pooled prior; targets are used only to compute likelihood.
 class ProbabilisticGraphReadout(GraphHead):
     use_layer_attention = True
     local_activation = staticmethod(lambda x: torch.softmax(x, dim=1))
@@ -544,6 +555,7 @@ class ProbabilisticGraphReadout(GraphHead):
         )
 
     def mixture_weights(self, node_posteriors, batch):
+        """Pool node posteriors into a graph prior, with optional attention over layers."""
         if self.use_layer_attention:
             attention = torch.softmax(self.layer_logits, dim=0)[None, :, None]
             node_posteriors = attention * node_posteriors
@@ -587,7 +599,7 @@ class ProbabilisticGraphReadoutNoLayerAttentionMLPVersion2(
     local_activation = staticmethod(torch.relu)
 
 
-# GSPN-GPT-FIXED: Retain unused legacy readout parameters for faithful state/gradient transfer.
+# Unused inherited parameters remain registered for compatibility with legacy checkpoints.
 class ProbabilisticGraphReadoutNoLayerAttentionMLP(ProbabilisticGraphReadout):
     def __init__(self, dim_target, config):
         super().__init__(dim_target, config)
@@ -607,7 +619,7 @@ class ProbabilisticGraphReadoutNoLayerAttentionMLP(ProbabilisticGraphReadout):
         return GraphResult(predictions, log_prob)
 
 
-# GSPN-GPT-FIXED: Equation 5 supervised pooling is a separate head, not another inference loop.
+# Supervised graph pooling follows Equation 5 of the GSPN paper.
 class SupervisedGraphReadout(GraphHead):
     def __init__(self, num_components, num_layers, num_graph_components, dim_target, pooling):
         super().__init__()
@@ -627,15 +639,14 @@ class SupervisedGraphReadout(GraphHead):
         return GraphResult(self.classifier(pooled))
 
 
-# GSPN-GPT-FIXED: Resolve canonical classes directly, without importing retired implementations.
 def _resolve_type(spec, base):
+    """Resolve a class path and enforce the required internal extension contract."""
     implementation = s2c(spec) if isinstance(spec, str) else spec
     if not isinstance(implementation, type) or not issubclass(implementation, base):
         raise TypeError(f"{spec!r} must implement the {base.__name__} contract")
     return implementation
 
 
-# GSPN-GPT-FIXED: Canonical implementation preserves the framework boundary and output positions.
 class GSPN(ModelInterface):
     def __init__(self, dim_input_features, dim_target, config):
         if "add_self_loops" in config:
@@ -674,6 +685,7 @@ class GSPN(ModelInterface):
         )
 
     def _prepare_evidence(self, data):
+        """Normalize masks and ensure one self-loop per node without modifying the input graph."""
         x = data.x
         if x.shape[0] == 0:
             raise ValueError("GSPN requires at least one node")
@@ -699,6 +711,7 @@ class GSPN(ModelInterface):
         if x.shape[0] == 0:
             raise ValueError("GSPN requires at least one node")
         observed = observed_feature_mask(x, observed_mask)
+        # Missing features use observed means only; entirely unobserved features use zero.
         evidence = x.detach().clone().float().masked_fill(~observed, torch.nan)
         means = torch.nan_to_num(torch.nanmean(evidence, dim=0), nan=0.0)
         evidence = torch.where(torch.isnan(evidence), means[None, :], evidence)
@@ -709,6 +722,7 @@ class GSPN(ModelInterface):
             .cluster_centers_
         )
         centers = torch.as_tensor(centers, dtype=x.dtype, device=x.device)
+        # Repeat fitted centers when the batch has fewer nodes than mixture components.
         centers = centers[torch.arange(self.num_components, device=x.device) % count]
         max_variance = self.config.get("init_max_variance", 10.0)
         if max_variance <= 0:
@@ -717,8 +731,8 @@ class GSPN(ModelInterface):
             emission.initialize_from_centers(centers, max_variance)
         self.initialized.fill_(True)
 
-    # GSPN-GPT-FIXED: Completed layer results are the only source of posterior/parameter history.
     def _infer_layer(self, evidence, layer_index, previous_layers):
+        """Infer one layer; only the final layer may average preceding emission parameters."""
         emission = self.emissions[layer_index]
         previous_posterior = previous_layers[-1].posterior if previous_layers else None
         prior = self.transitions[layer_index](
@@ -735,20 +749,22 @@ class GSPN(ModelInterface):
         log_prob, posterior = infer_mixture(components, prior)
         return LayerResult(prior, params, components, log_prob, posterior)
 
-    # GSPN-GPT-FIXED: Keep one layer history instead of parallel parameter/posterior bookkeeping.
     def _infer_nodes(self, evidence):
+        """Run layers in order, passing each posterior to the next transition."""
         layers = []
         for index in range(self.num_layers):
             layers.append(self._infer_layer(evidence, index, layers))
         return tuple(layers)
 
     def _run_node_inference(self, data):
+        """Prepare evidence, apply guarded initialization, and stack layer posteriors."""
         evidence = self._prepare_evidence(data)
         self.initialize_from_evidence(evidence.x, evidence.observed_mask)
         layers = self._infer_nodes(evidence)
         return evidence, layers, torch.stack([layer.posterior for layer in layers], dim=1)
 
     def _evaluate_missing_features(self, evidence, final):
+        """Score hidden evidence conditionally; unavailable hidden values produce NaN."""
         missing = ~evidence.observed_mask
         has_missing = missing.reshape(evidence.x.shape[0], -1).any(1)
         known = (
@@ -756,18 +772,21 @@ class GSPN(ModelInterface):
             .reshape(evidence.x.shape[0], -1)
             .all(1)
         )
+        # Sanitize unavailable rows before density evaluation; report NaN for their scores below.
         safe = torch.where(
             known.reshape((-1,) + (1,) * (evidence.x.ndim - 1)) & torch.isfinite(evidence.x),
             evidence.x,
             torch.zeros_like(evidence.x),
         )
         complete = self.emissions[-1].component_log_prob(safe, params=final.parameters)
+        # Both likelihoods use the same final prior and emission parameters.
         conditional = mixture_log_prob(complete, final.prior) - final.log_prob
         return torch.where(
             has_missing & ~known, torch.full_like(conditional, torch.nan), conditional
         )
 
     def infer(self, data, *, include_imputation=True, include_diagnostics=True):
+        """Return layer results, optional imputation/diagnostics, and optional graph predictions."""
         evidence, layers, posteriors = self._run_node_inference(data)
         final = layers[-1]
         imputation = (
@@ -794,6 +813,7 @@ class GSPN(ModelInterface):
         return self.infer(data).to_reference_outputs()
 
     def reference_state_mapping(self):
+        """Map every legacy parameter/buffer name to its corresponding current state entry."""
         mapping = {"initialized": "initialized"}
         for name in ("emissions", "transitions"):
             for i, module in enumerate(getattr(self, name)):
@@ -839,7 +859,7 @@ class GSPN(ModelInterface):
         return self.load_state_dict(converted, strict=True)
 
 
-# GSPN-GPT-FIXED: Supervised models compose the same inference core with the Eq. 5 head.
+# Supervised models compose the same inference core with the Eq. 5 head.
 class SupGSPN(GSPN):
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, {**config, "readout": None})

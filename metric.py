@@ -145,7 +145,6 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-# GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
 from random import shuffle
 from typing import List, Tuple
 
@@ -209,14 +208,14 @@ class MissingFeaturesMSE(Metric):
         x, imputed_values = outputs[2][3], outputs[2][4]
         masked_nodes = outputs[2][5]
 
-        # GSPN-GPT-FIXED: A batch with no mask has no hidden features to score.
+        # A batch with no mask has no hidden features to score.
         if masked_nodes is None:
             return imputed_values.reshape(-1)[:0], x.reshape(-1)[:0]
         return imputed_values[masked_nodes], x[masked_nodes]
 
 
     def compute_metric(self, targets: torch.Tensor, predictions: torch.Tensor) -> torch.tensor:
-        # GSPN-GPT-FIXED: Skip missing ground truth and return zero for an empty batch.
+        # Skip missing ground truth and return zero for an empty batch.
         valid = torch.isfinite(targets)
         return torch.nn.functional.mse_loss(predictions[valid], targets[valid]) if valid.any() else predictions.sum() * 0
 
@@ -228,7 +227,7 @@ class ConditionalMeanImputationLikelihood(Metric):
 
     def get_predictions_and_targets(self, targets: torch.Tensor, *outputs: List[torch.Tensor]) -> Tuple[
         torch.Tensor, torch.Tensor]:
-        # GSPN-GPT-FIXED: Only evaluate conditional likelihood where hidden truth exists.
+        # Only evaluate conditional likelihood where hidden truth exists.
         values = outputs[2][9]
         mask = outputs[2][5]
         count = mask.reshape(mask.shape[0], -1).sum(1) if mask is not None else torch.zeros_like(values)
@@ -295,7 +294,7 @@ class OGBGROCAUC(MulticlassAccuracy):
 
         pred = outputs[0]
 
-        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        # Keep the task axis for single-task OGB datasets.
         if targets.ndim == 1:
             targets = targets[:, None]
         if pred.ndim == 1:
@@ -341,7 +340,7 @@ class OGBGAP(MulticlassAccuracy):
 
         pred = outputs[0]
 
-        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        # Keep the task axis for single-task OGB datasets.
         if targets.ndim == 1:
             targets = targets[:, None]
         if pred.ndim == 1:
@@ -390,7 +389,7 @@ class OGBGrahPropPredEvaluator(Metric):
 
         pred = outputs[0]
 
-        # GSPN-GPT-FIXED: Keep the task axis for single-task OGB datasets.
+        # Keep the task axis for single-task OGB datasets.
         if targets.ndim == 1:
             targets = targets[:, None]
         if pred.ndim == 1:
@@ -561,7 +560,7 @@ class DGILoss(Metric):
                 (default: :obj:`True`)
         """
         summary = summary.t() if summary.dim() > 1 else summary
-        # GSPN-GPT-FIXED: Score each node against its own graph summary, not every node.
+        # Score each node against its own graph summary, not every node.
         value = (z * summary.t()).sum(-1)
         return torch.sigmoid(value) if sigmoid else value
 

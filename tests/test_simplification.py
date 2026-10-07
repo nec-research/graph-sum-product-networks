@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Independent regressions verify readability changes preserve behavior.
+# Independent regressions verify readability changes preserve behavior.
 import gzip
 from copy import deepcopy
 from pathlib import Path
@@ -89,7 +89,7 @@ def test_categorical_indexing_preserves_invalid_label_error(invalid):
     ],
 )
 def test_predictor_outputs_gradients_and_update_regression(case):
-    # GSPN-GPT-FIXED: Restore capture RNG consumption to verify native initialization as well.
+    # Restore capture RNG consumption to verify native initialization as well.
     torch.manual_seed(451)
     inputs = torch.cat([torch.randn(n, 3, dtype=case["data"]["x"].dtype) for n in (3, 1, 2)])
     assert_close(inputs, case["data"]["x"])
@@ -137,7 +137,7 @@ def test_predictor_pooling_preserves_error(model_name, pooling):
         getattr(readout, model_name)((3, 0), 2, {"global_pooling": pooling, "hidden_units": 4})
 
 
-# GSPN-GPT-FIXED: Configuration cleanup preserves precedence, references, and source dictionaries.
+# Configuration cleanup preserves precedence, references, and source dictionaries.
 @pytest.mark.parametrize("stage", ["encoder", "predictor"])
 def test_stage_configuration_merge(tmp_path, stage):
     from pipeline import EmbeddingPipeline
@@ -184,7 +184,7 @@ def test_stage_configuration_missing_stage_error(tmp_path, stage):
     assert error.value.args == (stage,)
 
 
-# GSPN-GPT-FIXED: Lifecycle forwarding retains every explicit callback and distributed argument.
+# Lifecycle forwarding retains every explicit callback and distributed argument.
 @pytest.mark.parametrize("final", [False, True])
 def test_pipeline_lifecycle_argument_forwarding(tmp_path, monkeypatch, final):
     from pipeline import EmbeddingPipeline
@@ -356,7 +356,7 @@ def test_predictor_empty_partition_error(tmp_path, partition):
         experiment._predictor_loaders(embeddings, {"batch_size": 2}, 0.5)
 
 
-# GSPN-GPT-FIXED: Preserve the helper's existing behavior for any explicitly selected stage block.
+# Preserve the helper's existing behavior for any explicitly selected stage block.
 def test_stage_configuration_excludes_selected_custom_block(tmp_path):
     from pipeline import EmbeddingPipeline
 

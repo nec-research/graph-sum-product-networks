@@ -1,4 +1,3 @@
-# GSPN-GPT-FIXED: MLWiz dataset contract and preserved evaluation partitions.
 splitter:
   splits_folder: DATA_SPLITS_MLWIZ/uracil
   class_name: migration.PreservedSplitter

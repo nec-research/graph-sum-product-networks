@@ -146,15 +146,16 @@ arrangements between the parties relating hereto.
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
 
-# GSPN-GPT-FIXED: MLWiz provider preserves named partitions and evaluation transforms.
+# MLWiz provider preserves named partitions and evaluation transforms.
 import math
 
 from mlwiz.data.provider import DataProvider as BaseDataProvider
 
 
-# GSPN-GPT-FIXED: Validate loaded artifacts even when mlwiz-data reuses existing files.
+# Validate loaded artifacts even when mlwiz-data reuses existing files.
 class DataProvider(BaseDataProvider):
     def _get_splitter(self):
+        """Validate reused split artifacts once against the current dataset size."""
         splitter = super()._get_splitter()
         if not getattr(self, "_validated_splits", False):
             from migration import validate_splits
@@ -174,6 +175,7 @@ class DataProvider(BaseDataProvider):
 
 class WeakSupervisionDataProvider(DataProvider):
     def _fraction(self, indices, kwargs):
+        """Select an ordered supervision prefix and consume its loader-only configuration key."""
         fraction = kwargs.pop(
             "weak_supervision_percentage", getattr(self, "supervision_fraction", 1.0)
         )

@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Analytic checks use the canonical component-density emission interface.
+# Analytic checks use the canonical component-density emission interface.
 import itertools
 import math
 

@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Convert saved partitions to MLWiz without changing any index/order.
+# Convert saved partitions to MLWiz without changing any index/order.
 import argparse
 import hashlib
 import json
@@ -18,6 +18,7 @@ def sha256(path):
 
 
 def validate_splits(data, dataset_size=None):
+    """Check bounds, duplicates, disjoint partitions, and containment in the outer non-test pool."""
     outer = data["outer_folds"]
     inner = data["inner_folds"]
     args = data["splitter_args"]
@@ -43,7 +44,7 @@ def validate_splits(data, dataset_size=None):
                 sets.append(set(indices))
             if any(a & b for i, a in enumerate(sets) for b in sets[i + 1 :]):
                 raise ValueError("Partitions overlap")
-        # GSPN-GPT-FIXED: Inner selection uses the non-test pool before final holdout.
+        # Inner selection uses the non-test pool before final holdout.
         training = set(outer_fold["train"]).union(outer_fold["val"])
         for fold in inner_folds:
             if not set(fold["train"]).union(fold["val"]).issubset(training):
@@ -52,6 +53,7 @@ def validate_splits(data, dataset_size=None):
 
 
 def convert_split(source, destination, dataset_size=None):
+    """Convert indices without reordering; reject conflicting existing artifacts or provenance."""
     source, destination = Path(source), Path(destination)
     data = validate_splits(torch.load(source, weights_only=False), dataset_size)
     splitter = Splitter(**data["splitter_args"])
@@ -97,7 +99,7 @@ class PreservedSplitter(Splitter):
         self.legacy_splits_file = legacy_splits_file
 
     def split(self, dataset, targets=None):
-        # GSPN-GPT-FIXED: Dataset processing must never silently regenerate research folds.
+        # Dataset processing must never silently regenerate research folds.
         data = validate_splits(
             torch.load(self.legacy_splits_file, weights_only=False), len(dataset)
         )
@@ -140,7 +142,7 @@ def main():
         if source is not None:
             convert_split(source, destination, len(dataset))
         else:
-            # GSPN-GPT-FIXED: Revalidate already prepared official OGB partitions.
+            # Revalidate already prepared official OGB partitions.
             loaded = Splitter.load(str(destination))
             official = OfficialOGBSplitter(**split["args"])
             official.split(dataset)
@@ -156,7 +158,7 @@ def main():
         parser.error("Supply --config-file or --source and --destination")
 
 
-# GSPN-GPT-FIXED: When no legacy artifact exists, retain official OGB partitions exactly.
+# When no legacy artifact exists, retain official OGB partitions exactly.
 class OfficialOGBSplitter(Splitter):
     def split(self, dataset, targets=None):
         self.source_path = dataset.dataset_folder / "official_splits.json"
@@ -172,7 +174,7 @@ class OfficialOGBSplitter(Splitter):
         validate_splits(data, len(dataset))
 
     def save(self, path):
-        # GSPN-GPT-FIXED: Retain official-partition provenance alongside the MLWiz artifact.
+        # Retain official-partition provenance alongside the MLWiz artifact.
         super().save(path)
         identity = {
             "source": str(self.source_path.resolve()),

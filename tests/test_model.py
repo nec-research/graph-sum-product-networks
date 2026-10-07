@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Frozen numerical regression replaces the retired implementation as oracle.
+# Frozen numerical regression replaces the retired implementation as oracle.
 import gzip
 from copy import deepcopy
 from functools import lru_cache
@@ -31,7 +31,7 @@ READOUTS = [
 ROOT = Path(__file__).resolve().parents[1]
 
 
-# GSPN-GPT-FIXED: Load tensors only; the oracle contains no executable legacy model code.
+# Load tensors only; the oracle contains no executable legacy model code.
 @lru_cache(maxsize=1)
 def snapshots():
     with gzip.open(ROOT / "tests/fixtures/gspn_regression.pt.gz", "rb") as stream:
@@ -70,7 +70,7 @@ def assert_gradients(new, expected):
             assert_close(actual, gradient, f"gradient.{key}")
 
 
-# GSPN-GPT-FIXED: Preserve all prior output comparisons against captured independent evidence.
+# Preserve all prior output comparisons against captured independent evidence.
 @pytest.mark.parametrize("case", cases("outputs"))
 def test_all_outputs_regression(case):
     new, data = replay(case)
@@ -130,7 +130,7 @@ def test_gradients_and_optimizer_update_regression(case):
     assert_close(new(data), case["updated_outputs"])
 
 
-# GSPN-GPT-FIXED: Replay original initialization with its captured RNG state and observed evidence.
+# Replay original initialization with its captured RNG state and observed evidence.
 @pytest.mark.parametrize("case", cases("initialization"))
 def test_kmeans_regression_and_training_guard(case):
     new, data = replay(case)
@@ -174,7 +174,7 @@ def test_explicit_initialization_ignores_hidden_truth():
         model.GSPN((3, 0), 2, config("integer", init_kmeans=True))
 
 
-# GSPN-GPT-FIXED: Keep operation-skipping and self-loop tests independent of fixture data.
+# Keep operation-skipping and self-loop tests independent of fixture data.
 def test_encode_skips_optional_work(monkeypatch):
     new = model.GSPN((2, 0), 2, config(readout="model.ProbabilisticGraphReadout")).double()
     data = graphs()
@@ -223,7 +223,7 @@ def test_isolated_node_message_and_neighbor_average():
     transformed = posteriors @ torch.softmax(transition.transition_logits, dim=0).T
     assert_close(actual[:2], ((transformed[0] + transformed[1]) / 2).expand(2, -1))
     assert_close(actual[2], transformed[2])
-    # GSPN-GPT-FIXED: A second loop changes connected-node weights but leaves isolated nodes equal.
+    # A second loop changes connected-node weights but leaves isolated nodes equal.
     loops = torch.arange(3).repeat(2, 1)
     duplicated = transition(
         posteriors, edge_index=torch.cat((prepared.edge_index, loops), dim=1), num_nodes=3
@@ -240,7 +240,7 @@ def test_removed_loop_option(value):
         model.GSPN((2, 0), 2, config(add_self_loops=value))
 
 
-# GSPN-GPT-FIXED: Legacy tensor conversion remains useful without any executable old models.
+# Legacy tensor conversion remains useful without any executable old models.
 @pytest.mark.parametrize("invalid", ["missing", "unexpected", "shape", "layers"])
 def test_invalid_reference_state(invalid):
     case = snapshots()["groups"]["initialization"][0]
@@ -306,7 +306,7 @@ def test_fixture_provenance_and_retired_modules():
     assert not (ROOT / "sup_model.py").exists()
 
 
-# GSPN-GPT-FIXED: Standard-engine smoke covers the canonical public model paths.
+# Standard-engine smoke covers the canonical public model paths.
 @pytest.mark.parametrize("supervised", [False, True])
 def test_cpu_training_engine(tmp_path, supervised):
     cfg = Grid(yaml.safe_load((ROOT / "configs/smoke_supervised.yml").read_text()))[0]
@@ -423,7 +423,7 @@ def loss(outputs):
     return value
 
 
-# GSPN-GPT-FIXED: Independent analytic checks complement the frozen regression oracle.
+# Independent analytic checks complement the frozen regression oracle.
 def test_component_densities_and_shortcut_parameters():
     emission = model.GSPNMultiCategoricalEmission(2, 2, [2, 3]).double()
     params = model.MultiCategoricalParameters(

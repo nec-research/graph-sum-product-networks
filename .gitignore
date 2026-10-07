@@ -1,5 +1,5 @@
 .ipynb_checkpoints/
-# GSPN-GPT-FIXED: Keep generated environments, caches, and MLWiz evidence out of Git.
+# Keep generated environments, caches, and MLWiz evidence out of Git.
 .venv/
 __pycache__/
 .pytest_cache/

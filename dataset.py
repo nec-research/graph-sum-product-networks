@@ -146,7 +146,7 @@ arrangements between the parties relating hereto.
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
 
-# GSPN-GPT-FIXED: MLWiz adapters preserve graph order and return (graph, target).
+# MLWiz adapters preserve graph order and return (graph, target).
 import hashlib
 import json
 from pathlib import Path
@@ -158,6 +158,7 @@ from torch_geometric.datasets import TUDataset
 
 
 def transform_identity(value):
+    """Serialize transform configuration recursively for processed-dataset cache identity."""
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
     if isinstance(value, (list, tuple)):
@@ -189,7 +190,7 @@ class GraphDataset(DatasetInterface):
         self.source_root = root
         self.options = kwargs
         self.seed = seed
-        # GSPN-GPT-FIXED: Dataset-specific preprocessing identity avoids stale cache collisions.
+        # Dataset-specific preprocessing identity avoids stale cache collisions.
         identity = {
             "name": self.source_name,
             "root": str(Path(root).resolve()),
@@ -199,6 +200,7 @@ class GraphDataset(DatasetInterface):
             "pre_transform": transform_identity(pre_transform),
         }
         digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
+        # Preserve the CPU Torch RNG while precomputing stochastic transforms.
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
             super().__init__(
@@ -215,9 +217,11 @@ class GraphDataset(DatasetInterface):
 
     @staticmethod
     def _load_dataset(dataset_filepath):
+        """Load the trusted graph cache, which contains PyG objects as well as tensors."""
         return torch.load(dataset_filepath, weights_only=False)
 
     def __getitem__(self, index):
+        """Return clones so transforms cannot mutate the processed cache."""
         graph, target = self.dataset[index]
         return graph.clone(), target.clone()
 
@@ -236,10 +240,11 @@ class GraphDataset(DatasetInterface):
         return self._target_dimension()
 
     def _target_dimension(self):
+        """Default to a scalar target; concrete adapters specify task-dependent widths."""
         return 1
 
     def _samples(self, graphs):
-        # Fixed seed makes precomputed masks reproducible without disturbing experiment RNG.
+        """Clone graphs in source order and attach stable sample IDs and flattened targets."""
         result = []
         for index, source in enumerate(graphs):
             graph = source.clone()
@@ -295,10 +300,10 @@ class OGBGDatasetInterface(GraphDataset):
 class OGBGmolpcbaFeatureMap(OGBGDatasetInterface):
     def process_dataset(self):
         samples = super().process_dataset()
-        # GSPN-GPT-FIXED: Preserve the original category-ID mapping and graph order.
+        # Preserve the original category-ID mapping and graph order.
         values = torch.cat([g.x for g, _ in samples])
         vocabulary = [torch.unique(values[:, i], sorted=True) for i in range(values.shape[1])]
-        # GSPN-GPT-FIXED: Persist the original IDs for consistent SMILES query encoding.
+        # Persist the original IDs for consistent SMILES query encoding.
         (self.dataset_folder / "categorical_vocabulary.json").write_text(
             json.dumps([v.tolist() for v in vocabulary])
         )
@@ -313,14 +318,14 @@ class OGBGmolpcbaFeatureMap(OGBGDatasetInterface):
 class SyntheticDataset(GraphDataset):
     def process_dataset(self):
         raw = Path(self.options.get("raw_dir") or str(self._raw_dataset_folder or "GENERATED_DATA"))
-        # GSPN-GPT-FIXED: Keep the original raw-file selection and sample ordering.
+        # Keep the original raw-file selection and sample ordering.
         files = [raw / 'data_list_100.pt']
         if not all(path.exists() for path in files):
             raise FileNotFoundError(
                 f"No data_list_*.pt files in {raw}; generate raw data using the notebook"
             )
         graphs = [g for path in files for g in torch.load(path, weights_only=False)]
-        # GSPN-GPT-FIXED: Node community labels are not graph targets; batch a dummy target.
+        # Node community labels are not graph targets; batch a dummy target.
         return [(graph, torch.zeros(1)) for graph, _ in self._samples(graphs)]
 
     def _target_dimension(self):
@@ -331,7 +336,7 @@ class SmokeGraphDataset(GraphDataset):
     """Small deterministic graph fixture; smoke scores are not research results."""
 
     def process_dataset(self):
-        # GSPN-GPT-FIXED: Test the real MLWiz CLI without downloading scientific datasets.
+        # Test the real MLWiz CLI without downloading scientific datasets.
         generator = torch.Generator().manual_seed(self.seed)
         graphs = []
         for i in range(30):

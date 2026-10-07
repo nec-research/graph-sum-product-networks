@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Load MLWiz final-run artifacts using the configuration's actual paths.
+# Load MLWiz final-run artifacts using the configuration's actual paths.
 import json
 from pathlib import Path
 
@@ -10,12 +10,14 @@ from mlwiz.util import s2c
 
 
 def assessment_folder(config_file):
+    """Resolve the assessment directory from the dataset-specific MLWiz experiment name."""
     config = yaml.safe_load(Path(config_file).read_text())
     grid = Grid(config)
     return Path(config["experiment"]["result_folder"]) / grid.exp_name / "MODEL_ASSESSMENT"
 
 
 def load_run(config_file, outer_fold=1, final_run=1, stage=None, device="cpu"):
+    """Load a selected final-run model, its provider, and configuration for notebook analysis."""
     config = yaml.safe_load(Path(config_file).read_text())
     outer = assessment_folder(config_file) / f"OUTER_FOLD_{outer_fold}"
     winner = json.loads((outer / "MODEL_SELECTION/winner_config.json").read_text())

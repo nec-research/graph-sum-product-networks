@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Reproducible MLWiz environment; keep the original flat modules.
+# Reproducible MLWiz environment; keep the original flat modules.
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -21,7 +21,7 @@ analysis = ["matplotlib", "seaborn", "jupyterlab", "rdkit", "cairosvg", "svglib"
 [project.scripts]
 gspn-convert-splits = "migration:main"
 
-# GSPN-GPT-FIXED: Package the canonical model only; retire duplicate implementation modules.
+# Package the canonical model only; retire duplicate implementation modules.
 [tool.setuptools]
 py-modules = ["model", "dataset", "provider", "transform", "readout", "metric", "optimizer", "baselines", "baseline_mask", "pipeline", "migration", "notebook_utils", "unsupervised_embedding_generation", "unsupervised_embedding_classification", "supervised_embedding_classification", "weakly_supervised_task"]
 

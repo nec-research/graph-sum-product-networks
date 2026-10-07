@@ -146,7 +146,7 @@ arrangements between the parties relating hereto.
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
 
-# GSPN-GPT-FIXED: Apply graph transforms to MLWiz tuple samples without mutating caches.
+# Apply graph transforms to MLWiz tuple samples without mutating caches.
 import hashlib
 from functools import wraps
 
@@ -168,9 +168,7 @@ from torch_geometric.utils import negative_sampling
 
 
 class NegativeSampling:
-    """
-    Randomly masks a percentage of nodes
-    """
+    """Sample negative edges for graph reconstruction."""
 
     @graph_transform
     def __call__(self, data):
@@ -180,13 +178,11 @@ class NegativeSampling:
 
 
 class DGICorruption:
-    """
-    Randomly shuffles node features
-    """
+    """Deterministically shuffle node features for graph corruption."""
 
     @graph_transform
     def __call__(self, data):
-        # GSPN-GPT-FIXED: Deterministic corruption permits stable held-out evaluation.
+        # Deterministic corruption permits stable held-out evaluation.
         digest = hashlib.sha256(data.x.detach().cpu().numpy().tobytes()).digest()
         generator = torch.Generator(device=data.x.device).manual_seed(
             int.from_bytes(digest[:8], "little")
@@ -198,9 +194,7 @@ class DGICorruption:
 
 
 class RandomNodeMask:
-    """
-    Randomly masks a percentage of nodes
-    """
+    """Mask nodes at a fixed rate; data.mask=True marks observed nodes."""
 
     def __init__(self, percentage_to_mask):
         self.percentage_to_mask = percentage_to_mask
@@ -210,7 +204,6 @@ class RandomNodeMask:
         assert len(data.x.shape) == 2
 
         num_nodes = data.x.shape[0]
-        # num_features = data.x.shape[1]
         mask = torch.rand(num_nodes) >= self.percentage_to_mask
         data.mask = mask
 
@@ -218,9 +211,7 @@ class RandomNodeMask:
 
 
 class RandomNodeFeaturesMask:
-    """
-    Randomly masks a percentage of node features
-    """
+    """Mask features at a fixed rate; data.mask=True marks observed features."""
 
     def __init__(self, percentage_to_mask):
         self.percentage_to_mask = percentage_to_mask
@@ -229,7 +220,6 @@ class RandomNodeFeaturesMask:
     def __call__(self, data):
         assert len(data.x.shape) == 2
 
-        # num_features = data.x.shape[1]
         mask = torch.rand(data.x.shape) >= self.percentage_to_mask
         data.mask = mask
 
@@ -237,9 +227,7 @@ class RandomNodeFeaturesMask:
 
 
 class GammaRandomNodeFeaturesMask:
-    """
-    Randomly sample the percentage of features to mask for each node
-    """
+    """Sample a Gamma-derived missing-feature fraction independently for each node."""
 
     def __init__(self, alpha, beta):
         self.gamma = Gamma(concentration=alpha, rate=1.0 / beta)
@@ -255,15 +243,12 @@ class GammaRandomNodeFeaturesMask:
         )
         num_features_to_mask_per_node = torch.floor(perc * num_features).int()
 
-        # Ensure at least one feature is kept
-        # num_features_to_mask_per_node[num_features_to_mask_per_node == num_features] = num_features-1
-
         random_indices = torch.argsort(torch.rand(num_samples, num_features))
 
-        # mask is true if element needs to be retained
+        # True means observed; False means missing.
         mask = torch.ones_like(data.x).bool()
 
-        # mask the first k random indices for each node, where k is a number specifically sampled for each node
+        # Each node masks its own sampled number of randomly chosen features.
         for i in range(num_samples):
             mask[i, random_indices[i, : num_features_to_mask_per_node[i]]] = False
 
@@ -279,7 +264,7 @@ class ContinuousAttributesTUDatasetChemical:
         return data
 
 
-# GSPN-GPT-FIXED: Replace the old framework's fixed, stateless Degree transform.
+# Replace the old framework's fixed, stateless Degree transform.
 class Degree:
     @graph_transform
     def __call__(self, data):
@@ -289,7 +274,7 @@ class Degree:
         return data
 
 
-# GSPN-GPT-FIXED: MLWiz accepts a single transform specification; compose graph tuples here.
+# MLWiz accepts a single transform specification; compose graph tuples here.
 class Compose:
     def __init__(self, transforms):
         from mlwiz.util import s2c

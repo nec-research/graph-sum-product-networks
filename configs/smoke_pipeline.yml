@@ -1,5 +1,3 @@
-# GSPN-GPT-FIXED: Canonical GSPN paths/settings; fresh result name avoids old checkpoints.
-# GSPN-GPT-FIXED: MLWiz configuration with validated saved partitions.
 dataset:
   storage_folder: .smoke/data
   dataset_class: dataset.SmokeGraphDataset

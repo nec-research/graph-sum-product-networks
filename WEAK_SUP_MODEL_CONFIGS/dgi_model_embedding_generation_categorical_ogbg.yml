@@ -1,4 +1,3 @@
-# GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
 dataset:
   storage_folder: DATA_MLWIZ/ogbg-molpcba_dgi_OGBGDatasetInterface
   dataset_class: dataset.OGBGDatasetInterface
