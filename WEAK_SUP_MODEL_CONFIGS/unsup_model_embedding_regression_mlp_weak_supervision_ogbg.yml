@@ -1,3 +1,4 @@
+# GSPN-GPT-FIXED: Canonical GSPN paths/settings; fresh result name avoids old checkpoints.
 # GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
 dataset:
   storage_folder: DATA_MLWIZ/ogbg-molpcba
@@ -20,7 +21,7 @@ data_loading:
       pin_memory: true
 experiment:
   result_folder: RESULTS_MLWIZ
-  exp_name: unsup_model_embedding_regression_mlp_weak_supervision_ogbg_ogbg-molpcba_mlwiz
+  exp_name: unsup_model_embedding_regression_mlp_weak_supervision_ogbg_ogbg-molpcba_mlwiz_refactored
   experiment: pipeline.EmbeddingPipeline
   model_selection_criteria:
   - metric: main_score
@@ -43,7 +44,6 @@ grid:
     - 10
     - 5
     - 20
-    num_hidden_neurons: 0
     num_layers:
     - 5
     - 10

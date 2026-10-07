@@ -145,43 +145,43 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+
+# GSPN-GPT-FIXED: Keep graph predictors here; GSPN heads now live exclusively in model.py.
 # GSPN-GPT-FIXED: Migrate framework imports and model constructors to MLWiz.
-from typing import Tuple, Optional, List
 
 import torch
-import torch.nn as nn
-from mlwiz.util import s2c
-from mlwiz.model.interface import ModelInterface
-from model import graph_dimensions
 import torch.nn.functional as F
-from torch.nn import Parameter
-from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
+from mlwiz.model.interface import ModelInterface
+from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
 
-from model import exp_normalize_trick
+from model import graph_dimensions
 
 
 class LinearGraphClassifier_GlobalReadout(ModelInterface):
     """
     This MLP computes a prediction starting from node embeddings
     """
+
     # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        if config['global_pooling'] == 'sum':
+        if config["global_pooling"] == "sum":
             self.global_pooling = global_add_pool
-        elif config['global_pooling'] == 'mean':
+        elif config["global_pooling"] == "mean":
             self.global_pooling = global_mean_pool
-        elif config['global_pooling'] == 'max':
+        elif config["global_pooling"] == "max":
             self.global_pooling = global_max_pool
         else:
             raise NotImplementedError("Global pooling operator not recognized")
 
         self.out = torch.nn.Linear(dim_node_features, dim_target)
 
-    def forward(self, data, **kwargs) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
+    def forward(
+        self, data, **kwargs
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
         graph_embeddings = self.global_pooling(node_embeddings, batch)
         out = self.out(graph_embeddings)
@@ -192,27 +192,30 @@ class MLPGraphClassifier_GlobalReadout(ModelInterface):
     """
     This MLP computes a prediction starting from node embeddings
     """
+
     # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        if config['global_pooling'] == 'sum':
+        if config["global_pooling"] == "sum":
             self.global_pooling = global_add_pool
-        elif config['global_pooling'] == 'mean':
+        elif config["global_pooling"] == "mean":
             self.global_pooling = global_mean_pool
-        elif config['global_pooling'] == 'max':
+        elif config["global_pooling"] == "max":
             self.global_pooling = global_max_pool
         else:
             raise NotImplementedError("Global pooling operator not recognized")
 
-        hidden_units = config['hidden_units']
+        hidden_units = config["hidden_units"]
         self.fc_local = torch.nn.Linear(dim_node_features, hidden_units)
         self.fc_global = torch.nn.Linear(hidden_units, hidden_units)
         self.out = torch.nn.Linear(hidden_units, dim_target)
 
-    def forward(self, data, **kwargs) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
+    def forward(
+        self, data, **kwargs
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
 
         l = torch.relu(self.fc_local(node_embeddings))
@@ -226,152 +229,32 @@ class MLPGraphClassifier_GraphEmbedding(ModelInterface):
     """
     This MLP computes a prediction starting from graph embeddings, without transforming the node embeddings
     """
+
     # GSPN-GPT-FIXED: MLWiz supplies node/edge widths through one dimension argument.
     def __init__(self, dim_input_features, dim_target, config):
         super().__init__(dim_input_features, dim_target, config)
         dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
         self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
-        if config['global_pooling'] == 'sum':
+        if config["global_pooling"] == "sum":
             self.global_pooling = global_add_pool
-        elif config['global_pooling'] == 'mean':
+        elif config["global_pooling"] == "mean":
             self.global_pooling = global_mean_pool
-        elif config['global_pooling'] == 'max':
+        elif config["global_pooling"] == "max":
             self.global_pooling = global_max_pool
         else:
             raise NotImplementedError("Global pooling operator not recognized")
 
-        hidden_units = config['hidden_units']
+        hidden_units = config["hidden_units"]
         self.fc_global = torch.nn.Linear(dim_node_features, hidden_units)
         self.out = torch.nn.Linear(hidden_units, dim_target)
 
-    def forward(self, data, **kwargs) -> Tuple[
-        torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
+    def forward(
+        self, data, **kwargs
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[object] | None]:
         node_embeddings, batch = data.x, data.batch
 
         g = self.global_pooling(node_embeddings, batch)
         o = self.fc_global(g)
         out = self.out(F.relu(o))
         return out, g
-
-
-class ProbabilisticGraphReadout(nn.Module):
-    """
-    This is a probabilistic readout for predicting graph-related targets
-    """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, config):
-        super().__init__()
-
-        node_embedding_dim = config['num_mixtures']
-        num_graph_mixtures = config['num_mixtures']
-        num_layers = config['num_layers']
-        self.num_hidden_neurons = config['num_hidden_neurons']  # same number of hidden neurons for all MLPs involved
-
-        # P(Q_u = c)
-        prob_vec = torch.nn.init.uniform_(torch.empty(num_layers, dtype=torch.float32))
-        self.Lg = Parameter(prob_vec / prob_vec.sum(), requires_grad=True)
-
-        self.node_transform = torch.nn.Linear(node_embedding_dim*num_layers, num_graph_mixtures*num_layers)
-        self.graph_transform = torch.nn.Linear(num_graph_mixtures*num_layers, num_graph_mixtures*num_layers)
-
-        if config['global_pooling'] == 'sum':
-            self.global_pooling = global_add_pool
-        elif config['global_pooling'] == 'mean':
-            self.global_pooling = global_mean_pool
-        else:
-            raise ValueError('Probabilistic pooling must be sum or mean')
-
-        self.emission_class = s2c(config['graph_emission_class'])
-        self.emission = self.emission_class(dim_target,
-                                            num_graph_mixtures*num_layers,
-                                            self.num_hidden_neurons)
-
-    def forward(self, node_embeddings: torch.tensor, batch: torch.Tensor, **kwargs) -> Tuple[
-        torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
-        targets = kwargs['targets']
-
-        Lg_norm = exp_normalize_trick(self.Lg, dim=0).unsqueeze(0).unsqueeze(2)
-
-        node_tmp = self.node_transform((Lg_norm*node_embeddings).reshape((node_embeddings.shape[0], -1)))
-
-        # The exp-normalize tick here is VERY IMPORTANT, as it acts like a non-linearity and
-        # makes a real difference in the results.
-        # It also has a probabilistic interpretation since we would like to aggregate
-        # node information, weighted layer wise and then concatenated, represented as a probability
-        graph_tmp = self.graph_transform(self.global_pooling(exp_normalize_trick(node_tmp, dim=1), batch))
-
-        mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
-
-        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
-        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.impute(params_g, mixture_weights_g)
-
-        return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g
-
-
-class ProbabilisticGraphReadoutNoLayerAttention(ProbabilisticGraphReadout):
-
-    def forward(self, node_embeddings: torch.tensor, batch: torch.Tensor, **kwargs) -> Tuple[
-        torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
-        targets = kwargs['targets']
-
-        node_tmp = self.node_transform((node_embeddings).reshape((node_embeddings.shape[0], -1)))
-
-        # The exp-normalize tick here is VERY IMPORTANT, as it acts like a non-linearity and
-        # makes a real difference in the results.
-        # It also has a probabilistic interpretation since we would like to aggregate
-        # node information, weighted layer wise and then concatenated, represented as a probability
-        graph_tmp = self.graph_transform(self.global_pooling(exp_normalize_trick(node_tmp, dim=1), batch))
-
-        mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
-
-        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
-        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.impute(params_g, mixture_weights_g)
-
-        return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g
-
-
-class ProbabilisticGraphReadoutNoLayerAttentionMLP(ProbabilisticGraphReadout):
-
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, config)
-        num_graph_mixtures = config['num_mixtures']
-        num_layers = config['num_layers']
-        self.out = torch.nn.Linear(num_graph_mixtures*num_layers, dim_target)
-
-    def forward(self, node_embeddings: torch.tensor, batch: torch.Tensor, **kwargs) -> Tuple[
-        torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
-        targets = kwargs['targets']
-
-        l = torch.relu(self.node_transform(node_embeddings.reshape((node_embeddings.shape[0], -1))))
-        g = self.global_pooling(l, batch)
-        o = self.graph_transform(g)
-        out = self.out(F.relu(o))
-
-        log_likelihood_g = - torch.nn.functional.cross_entropy(out, targets, reduction='none')
-
-        return None, None, log_likelihood_g, None, out
-
-
-class ProbabilisticGraphReadoutNoLayerAttentionMLPVersion2(ProbabilisticGraphReadout):
-
-    def forward(self, node_embeddings: torch.tensor, batch: torch.Tensor, **kwargs) -> Tuple[
-        torch.Tensor, Optional[torch.Tensor], Optional[List[object]]]:
-        targets = kwargs['targets']
-
-        node_tmp = torch.relu(self.node_transform((node_embeddings).reshape((node_embeddings.shape[0], -1))))
-
-        # The exp-normalize tick here is VERY IMPORTANT, as it acts like a non-linearity and
-        # makes a real difference in the results.
-        # It also has a probabilistic interpretation since we would like to aggregate
-        # node information, weighted layer wise and then concatenated, represented as a probability
-        graph_tmp = self.graph_transform(self.global_pooling(node_tmp, batch))
-
-        mixture_weights_g = exp_normalize_trick(graph_tmp, dim=1)
-
-        # GSPN-GPT-FIXED: Emissions return four values; graph prediction uses prior weights.
-        params_g, log_likelihood_g, log_likelihood_g_comp, _ = self.emission.forward(targets, mixture_weights_g)
-        preds_g = self.emission.impute(params_g, mixture_weights_g)
-
-        return mixture_weights_g, params_g, log_likelihood_g, log_likelihood_g_comp, preds_g

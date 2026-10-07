@@ -19,8 +19,10 @@ from metric import (
     MissingFeaturesMSE,
 )
 from migration import OfficialOGBSplitter, PreservedSplitter
-from model import GSPN
-from readout import (
+
+# GSPN-GPT-FIXED: GSPN heads now share the canonical model module and named result interface.
+from model import (
+    GSPN,
     ProbabilisticGraphReadout,
     ProbabilisticGraphReadoutNoLayerAttention,
     ProbabilisticGraphReadoutNoLayerAttentionMLP,
@@ -42,17 +44,15 @@ def test_probabilistic_readouts(readout):
     config = {
         "num_mixtures": 2,
         "num_layers": 2,
-        "num_hidden_neurons": 0,
         "global_pooling": "mean",
         "graph_emission_class": "model.GSPNCategoricalEmission",
     }
-    model = readout(2, 0, 2, config)
+    model = readout(2, config)
     data = torch.softmax(torch.randn(6, 2, 2), dim=-1)
     result = model(data, torch.tensor([0, 0, 0, 1, 1, 1]), targets=torch.tensor([0, 1]))
-    assert len(result) == 5
-    assert torch.isfinite(result[2]).all()
-    assert result[4].shape == (2, 2)
-    (-result[2].mean()).backward()
+    assert torch.isfinite(result.log_prob).all()
+    assert result.predictions.shape == (2, 2)
+    (-result.log_prob.mean()).backward()
 
 
 def test_missing_metrics_empty_and_unknown():
@@ -163,7 +163,6 @@ def test_unavailable_categorical_truth_is_excluded():
     config = {
         "num_layers": 2,
         "num_mixtures": 2,
-        "num_hidden_neurons": 0,
         "emission_class": "model.GSPNMultiCategoricalEmission",
         "dim_categorical_features": [2, 3],
     }

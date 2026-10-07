@@ -1,4 +1,4 @@
-# GSPN-GPT-FIXED: Analytic probability checks exercise behavior, not implementation details.
+# GSPN-GPT-FIXED: Analytic checks use the canonical component-density emission interface.
 import itertools
 import math
 
@@ -8,20 +8,22 @@ from torch_geometric.data import Batch, Data
 
 from model import (
     GSPN,
+    CategoricalParameters,
+    GaussianParameters,
     GSPNCategoricalEmission,
     GSPNEmission,
     GSPNGaussianEmission,
     GSPNMultiCategoricalEmission,
-    posterior,
+    MultiCategoricalParameters,
+    SupGSPN,
+    infer_mixture,
 )
-from sup_model import SupGSPN
 
 
 def config(emission="model.GSPNGaussianEmission", layers=2, **kwargs):
     return dict(
         num_layers=layers,
         num_mixtures=2,
-        num_hidden_neurons=0,
         emission_class=emission,
         convolution_class="model.GSPNBaseConv",
         avg_parameters_across_layers=False,
@@ -45,50 +47,65 @@ def graph():
 def test_categorical_missing_and_integer_column():
     x = torch.tensor([[1.0], [float("nan")]])
     before = x.clone()
-    params = torch.tensor([[[0.8, 0.2], [0.1, 0.9]]], requires_grad=True)
+    probabilities = torch.tensor([[0.8, 0.2], [0.1, 0.9]], requires_grad=True)
+    params = CategoricalParameters(probabilities)
     weights = torch.tensor([[0.3, 0.7], [0.3, 0.7]], requires_grad=True)
-    ll, comp = GSPNCategoricalEmission.log_likelihood(
-        x, weights, params, torch.tensor([[False], [True]])
+    emission = GSPNCategoricalEmission(2, 2)
+    components = emission.component_log_prob(
+        x, params=params, observed_mask=torch.tensor([[True], [False]])
     )
+    ll, posterior = infer_mixture(components, weights)
     assert ll[0].item() == pytest.approx(math.log(0.3 * 0.2 + 0.7 * 0.9))
     assert ll[1].item() == pytest.approx(0, abs=1e-6)
-    torch.testing.assert_close(posterior(comp, weights)[1], weights[1])
+    torch.testing.assert_close(posterior[1], weights[1])
     torch.testing.assert_close(x, before, equal_nan=True)
     (-ll.sum()).backward()
-    assert torch.isfinite(params.grad).all()
+    assert torch.isfinite(probabilities.grad).all()
 
 
 def test_multicategorical_joint_normalizes_and_masks():
-    emission = GSPNMultiCategoricalEmission(2, 2, 0, [2, 3])
-    params = torch.tensor([[0.8, 0.2, 0.1, 0.3, 0.6], [0.1, 0.9, 0.7, 0.2, 0.1]])
+    emission = GSPNMultiCategoricalEmission(2, 2, [2, 3])
+    params = MultiCategoricalParameters(
+        (
+            CategoricalParameters(torch.tensor([[0.8, 0.2], [0.1, 0.9]])),
+            CategoricalParameters(torch.tensor([[0.1, 0.3, 0.6], [0.7, 0.2, 0.1]])),
+        )
+    )
     assignments = torch.tensor(list(itertools.product(range(2), range(3))))
     weights = torch.tensor([[0.4, 0.6]]).expand(6, -1)
-    ll, _ = emission.log_likelihood(assignments, weights, params)
+    ll, _ = infer_mixture(emission.component_log_prob(assignments, params=params), weights)
     assert ll.exp().sum().item() == pytest.approx(1.0)
     expected = 0.4 * 0.8 * 0.1 + 0.6 * 0.1 * 0.7
     assert ll[0].exp().item() == pytest.approx(expected)
-    ll_mask, _ = emission.log_likelihood(
-        assignments, weights, params, torch.tensor([[False, True]]).expand(6, -1)
+    components = emission.component_log_prob(
+        assignments, params=params, observed_mask=torch.tensor([[True, False]]).expand(6, -1)
     )
+    ll_mask, _ = infer_mixture(components, weights)
     assert ll_mask[0].exp().item() == pytest.approx(0.4 * 0.8 + 0.6 * 0.1)
-    imputed = emission.impute(params, weights)
+    imputed = emission.predictive_mean(params, weights=weights)
     torch.testing.assert_close(imputed[:, :2].sum(-1), torch.ones(6))
     torch.testing.assert_close(imputed[:, 2:].sum(-1), torch.ones(6))
 
 
 def test_gaussian_marginal_and_shortcut():
-    params = torch.tensor([[[[0.0, 2.0], [4.0, 3.0]], [[5.0, 1.0], [8.0, 2.0]]]])
+    params = GaussianParameters(
+        torch.tensor([[0.0, 4.0], [5.0, 8.0]]), torch.tensor([[2.0, 3.0], [1.0, 2.0]])
+    )
     x = torch.tensor([[1.0, float("nan")]])
     weights = torch.tensor([[0.25, 0.75]])
-    ll, _ = GSPNGaussianEmission.log_likelihood(x, weights, params, torch.tensor([[False, True]]))
+    emission = GSPNGaussianEmission(2, 2)
+    components = emission.component_log_prob(
+        x, params=params, observed_mask=torch.tensor([[True, False]])
+    )
+    ll, _ = infer_mixture(components, weights)
     expected = (
         0.25 * torch.distributions.Normal(0.0, 2.0).log_prob(torch.tensor(1.0)).exp()
         + 0.75 * torch.distributions.Normal(5.0, 1.0).log_prob(torch.tensor(1.0)).exp()
     )
     torch.testing.assert_close(ll.exp(), expected.reshape(1))
-    averaged = GSPNGaussianEmission.average_parameters([params, params])
-    torch.testing.assert_close(averaged[..., 1], params[..., 1] / math.sqrt(2))
-    torch.testing.assert_close(averaged[..., 0], params[..., 0])
+    averaged = emission.combine_shortcut_parameters([params, params])
+    torch.testing.assert_close(averaged.stddev, params.stddev / math.sqrt(2))
+    torch.testing.assert_close(averaged.mean, params.mean)
 
 
 @pytest.mark.parametrize("cls", [GSPN, SupGSPN])
@@ -100,7 +117,8 @@ def test_model_missing_evidence_and_gradients(cls, layers, shortcut):
     model = cls((2, 0), 2, cfg)
     data = graph()
     before = data.x.clone()
-    preds, emb, extras = model(data)
+    result = model.infer(data)
+    preds, emb, extras = result.to_reference_outputs()
     assert len(extras) == 10
     assert emb.shape == (3, layers * 2)
     assert torch.isfinite(extras[0]).all()
@@ -108,7 +126,7 @@ def test_model_missing_evidence_and_gradients(cls, layers, shortcut):
     torch.testing.assert_close(data.x, before)
     torch.testing.assert_close(extras[5], ~data.mask)
     final_h = emb.reshape(3, layers, 2)[:, -1]
-    expected = model.emissions[-1].impute(extras[8], final_h)
+    expected = model.emissions[-1].predictive_mean(result.layers[-1].parameters, weights=final_h)
     torch.testing.assert_close(extras[4], expected)
     loss = -extras[0].mean() + (preds.square().mean() if preds is not None else 0)
     loss.backward()
@@ -122,19 +140,12 @@ def test_kmeans_small_batch_ignores_hidden_truth():
     model = GSPN((2, 0), 2, config(init_kmeans=True, init_max_variance=4))
     model(data)
     assert model.initialized.item()
-    assert model.emissions[0].normal_params[..., 0].max() < 10
-    assert (
-        torch.nn.functional.softplus(model.emissions[0].normal_params[..., 1]).square().max()
-        <= 4.0001
-    )
+    assert model.emissions[0].mean.max() < 10
+    assert model.emissions[0].distribution_parameters().stddev.square().max() <= 4.0001
     with pytest.raises(ValueError):
         GSPN((2, 0), 2, config("model.GSPNCategoricalEmission", init_kmeans=True))
 
 
-def test_abstract_methods_raise():
-    with pytest.raises(NotImplementedError):
-        GSPNEmission.average_parameters([])
-    with pytest.raises(NotImplementedError):
-        GSPNEmission.log_likelihood(None, None, None)
-    with pytest.raises(NotImplementedError):
-        GSPNEmission(1, 1, 0)(None, None)
+def test_abstract_emission_contract():
+    with pytest.raises(TypeError):
+        GSPNEmission(1, 1)

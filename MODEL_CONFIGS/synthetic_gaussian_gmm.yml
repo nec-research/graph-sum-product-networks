@@ -1,3 +1,4 @@
+# GSPN-GPT-FIXED: Canonical GSPN paths/settings; fresh result name avoids old checkpoints.
 # GSPN-GPT-FIXED: MLWiz schema with dataset-specific result identity.
 dataset:
   storage_folder: DATA_MLWIZ/SyntheticDataset_50_50
@@ -20,7 +21,7 @@ data_loading:
       pin_memory: true
 experiment:
   result_folder: RESULTS_MLWIZ
-  exp_name: synthetic_gaussian_gmm_SyntheticDataset_50_50_mlwiz
+  exp_name: synthetic_gaussian_gmm_SyntheticDataset_50_50_mlwiz_refactored
   experiment: mlwiz.experiment.Experiment
   model_selection_criteria:
   - metric: main_score
@@ -46,9 +47,7 @@ grid:
   - 15
   - 20
   init_max_variance: 30
-  num_hidden_neurons: 0
   init_kmeans: true
-  add_self_loops: false
   optimizer:
   - class_name: mlwiz.training.callback.optimizer.Optimizer
     args:

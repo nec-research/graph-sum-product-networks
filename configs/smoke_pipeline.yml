@@ -1,3 +1,4 @@
+# GSPN-GPT-FIXED: Canonical GSPN paths/settings; fresh result name avoids old checkpoints.
 # GSPN-GPT-FIXED: MLWiz configuration with validated saved partitions.
 dataset:
   storage_folder: .smoke/data
@@ -19,7 +20,7 @@ data_loading:
       num_workers: 0
 experiment:
   result_folder: .smoke/results
-  exp_name: pipeline_smoke
+  exp_name: pipeline_smoke_refactored
   experiment: pipeline.EmbeddingPipeline
   model_selection_criteria:
   - metric: main_score
@@ -46,7 +47,6 @@ grid:
     model: model.GSPN
     num_layers: 2
     num_mixtures: 2
-    num_hidden_neurons: 0
     emission_class: model.GSPNGaussianEmission
     convolution_class: model.GSPNBaseConv
     avg_parameters_across_layers: false
