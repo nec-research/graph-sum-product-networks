@@ -84,15 +84,14 @@ def check_stop(should_terminate, deadline):
 
 
 class EmbeddingPipeline(Experiment):
+    # GSPN-GPT-FIXED: Make shared/stage/enforced precedence explicit without mutating settings.
     def _stage_config(self, key):
-        config = dict(self.model_config.items())
-        stage = dict(config.pop(key))
-        config.pop("encoder", None)
-        config.pop("predictor", None)
-        config.update(stage)
-        config["seed"] = self.exp_seed
-        config["checkpoint"] = True
-        return config
+        shared = {
+            name: value
+            for name, value in self.model_config.items()
+            if name not in ("encoder", "predictor", key)
+        }
+        return {**shared, **dict(self.model_config[key]), "seed": self.exp_seed, "checkpoint": True}
 
     def _train(
         self,
@@ -138,27 +137,19 @@ class EmbeddingPipeline(Experiment):
         fold = splitter.inner_folds[provider.outer_k][provider.inner_k]
         return {"train": list(fold.train_idxs), "validation": list(fold.val_idxs)}
 
-    def _run_pipeline(
+    # GSPN-GPT-FIXED: Keep cache provenance, encoder training, and extraction in one focused stage.
+    def _load_or_create_embeddings(
         self,
         dataset_getter,
-        training_timeout_seconds,
+        dataset,
+        partitions,
+        encoder_config,
+        final,
         logger,
-        progress_callback=None,
-        should_terminate=None,
-        final=False,
-        ddp_rank=None,
-        ddp_world_size=1,
+        deadline,
+        progress_callback,
+        should_terminate,
     ):
-        if ddp_world_size != 1:
-            raise ValueError(
-                "The embedding pipeline supports one device per run; parallelize folds/configurations with MLWiz"
-            )
-        deadline = (
-            None if training_timeout_seconds < 0 else time.monotonic() + training_timeout_seconds
-        )
-        encoder_config = self._stage_config("encoder")
-        partitions = self._partitions(dataset_getter, final)
-        dataset = dataset_getter._get_dataset()
         identity, digest = cache_identity(
             dataset, partitions, encoder_config, self.exp_seed, "outer" if final else "inner"
         )
@@ -188,17 +179,17 @@ class EmbeddingPipeline(Experiment):
                 shuffle=False,
             )
             model, _ = self._train(
-                encoder_config,
-                "encoder",
-                dataset.dim_input_features,
-                dataset.dim_target,
-                train,
-                validation,
-                None,
-                logger,
-                deadline,
-                progress_callback,
-                should_terminate,
+                config=encoder_config,
+                name="encoder",
+                dims=dataset.dim_input_features,
+                target_dim=dataset.dim_target,
+                train=train,
+                validation=validation,
+                test=None,
+                logger=logger,
+                deadline=deadline,
+                progress_callback=progress_callback,
+                should_terminate=should_terminate,
             )
             embeddings = {}
             for name, indices in partitions.items():
@@ -206,7 +197,11 @@ class EmbeddingPipeline(Experiment):
                     indices, is_eval=True, batch_size=encoder_config["batch_size"], shuffle=False
                 )
                 embeddings[name] = extract_embeddings(
-                    model, loader, encoder_config["device"], should_terminate, deadline
+                    model,
+                    loader,
+                    encoder_config["device"],
+                    should_terminate=should_terminate,
+                    deadline=deadline,
                 )
                 if len(embeddings[name]) != len(indices):
                     raise ValueError("Embedding count does not match partition indices")
@@ -219,10 +214,10 @@ class EmbeddingPipeline(Experiment):
                 },
                 str(cache),
             )
-        fraction = self.model_config.get("weak_supervision_percentage", 1.0)
-        if not 0 < fraction <= 1:
-            raise ValueError("weak_supervision_percentage must be in (0, 1]")
-        config = self._stage_config("predictor")
+        return embeddings
+
+    # GSPN-GPT-FIXED: Supervision subsets affect predictor loaders only; test remains complete.
+    def _predictor_loaders(self, embeddings, config, fraction):
         loaders = {}
         for name, samples in embeddings.items():
             selected = samples if name == "test" else samples[: math.floor(len(samples) * fraction)]
@@ -234,23 +229,64 @@ class EmbeddingPipeline(Experiment):
                 shuffle=name == "train" and config.get("shuffle", True),
                 num_workers=0,
             )
+        return loaders
+
+    # GSPN-GPT-FIXED: Show partition choice, embeddings, predictor training, and result packaging.
+    def _run_pipeline(
+        self,
+        dataset_getter,
+        training_timeout_seconds,
+        logger,
+        progress_callback=None,
+        should_terminate=None,
+        final=False,
+        ddp_rank=None,
+        ddp_world_size=1,
+    ):
+        if ddp_world_size != 1:
+            raise ValueError(
+                "The embedding pipeline supports one device per run; parallelize folds/configurations with MLWiz"
+            )
+        deadline = (
+            None if training_timeout_seconds < 0 else time.monotonic() + training_timeout_seconds
+        )
+        encoder_config = self._stage_config("encoder")
+        partitions = self._partitions(dataset_getter, final)
+        dataset = dataset_getter._get_dataset()
+        embeddings = self._load_or_create_embeddings(
+            dataset_getter=dataset_getter,
+            dataset=dataset,
+            partitions=partitions,
+            encoder_config=encoder_config,
+            final=final,
+            logger=logger,
+            deadline=deadline,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+        )
+        fraction = self.model_config.get("weak_supervision_percentage", 1.0)
+        if not 0 < fraction <= 1:
+            raise ValueError("weak_supervision_percentage must be in (0, 1]")
+        config = self._stage_config("predictor")
+        loaders = self._predictor_loaders(embeddings, config, fraction)
         dims = (embeddings["train"][0][0].x.shape[1], 0)
         _, metrics = self._train(
-            config,
-            "predictor",
-            dims,
-            dataset.dim_target,
-            loaders["train"],
-            loaders["validation"],
-            loaders.get("test"),
-            logger,
-            deadline,
-            progress_callback,
-            should_terminate,
+            config=config,
+            name="predictor",
+            dims=dims,
+            target_dim=dataset.dim_target,
+            train=loaders["train"],
+            validation=loaders["validation"],
+            test=loaders.get("test"),
+            logger=logger,
+            deadline=deadline,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
         )
         results = [{LOSS: metrics[i], SCORE: metrics[i + 1]} for i in range(0, 6, 2)]
         return tuple(results if final else results[:2])
 
+    # GSPN-GPT-FIXED: Name lifecycle arguments explicitly without altering the MLWiz signature.
     def _run_valid_impl(
         self,
         dataset_getter,
@@ -262,16 +298,17 @@ class EmbeddingPipeline(Experiment):
         ddp_world_size=1,
     ):
         return self._run_pipeline(
-            dataset_getter,
-            training_timeout_seconds,
-            logger,
-            progress_callback,
-            should_terminate,
-            False,
-            ddp_rank,
-            ddp_world_size,
+            dataset_getter=dataset_getter,
+            training_timeout_seconds=training_timeout_seconds,
+            logger=logger,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+            final=False,
+            ddp_rank=ddp_rank,
+            ddp_world_size=ddp_world_size,
         )
 
+    # GSPN-GPT-FIXED: Final assessment forwards the same callbacks and distributed arguments.
     def _run_test_impl(
         self,
         dataset_getter,
@@ -283,14 +320,14 @@ class EmbeddingPipeline(Experiment):
         ddp_world_size=1,
     ):
         return self._run_pipeline(
-            dataset_getter,
-            training_timeout_seconds,
-            logger,
-            progress_callback,
-            should_terminate,
-            True,
-            ddp_rank,
-            ddp_world_size,
+            dataset_getter=dataset_getter,
+            training_timeout_seconds=training_timeout_seconds,
+            logger=logger,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+            final=True,
+            ddp_rank=ddp_rank,
+            ddp_world_size=ddp_world_size,
         )
 
 

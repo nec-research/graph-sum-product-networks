@@ -9,7 +9,7 @@ import yaml
 from mlwiz.data.provider import SubsetTrainEval
 from mlwiz.data.splitter import Splitter
 from mlwiz.evaluation.grid import Grid
-from mlwiz.util import s2c
+from mlwiz.util import atomic_dill_save, s2c
 from torch_geometric.loader import DataLoader
 
 from dataset import SmokeGraphDataset
@@ -158,16 +158,41 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
     original = experiment._train
     stages = []
 
-    def train(config, name, dims, target, loader, val, test, *args):
+    # GSPN-GPT-FIXED: The spy accepts the same named training arguments as the pipeline.
+    def train(
+        config,
+        name,
+        dims,
+        target_dim,
+        train,
+        validation,
+        test,
+        logger,
+        deadline,
+        progress_callback,
+        should_terminate,
+    ):
         stages.append(
             (
                 name,
-                len(loader.dataset),
-                len(val.dataset),
+                len(train.dataset),
+                len(validation.dataset),
                 None if test is None else len(test.dataset),
             )
         )
-        return original(config, name, dims, target, loader, val, test, *args)
+        return original(
+            config=config,
+            name=name,
+            dims=dims,
+            target_dim=target_dim,
+            train=train,
+            validation=validation,
+            test=test,
+            logger=logger,
+            deadline=deadline,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+        )
 
     experiment._train = train
     result = experiment.run_valid(provider, -1, None)
@@ -178,7 +203,18 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
 
     cache = next((tmp_path / "embeddings").rglob("embeddings.pkl"))
     saved = dill_load(str(cache))
-    assert [int(g.sample_id) for g, _ in saved["embeddings"]["train"]] == list(range(12))
+    # GSPN-GPT-FIXED: Extraction retains exact partition order, cache schema, and eval transforms.
+    assert set(saved) == {"identity", "embeddings", "encoder_state"}
+    assert {
+        name: [int(graph.sample_id) for graph, _ in samples]
+        for name, samples in saved["embeddings"].items()
+    } == {"train": list(range(12)), "validation": list(range(12, 20))}
+    assert provider.calls == [
+        (list(range(12)), False),
+        (list(range(12, 20)), True),
+        (list(range(12)), True),
+        (list(range(12, 20)), True),
+    ]
     stages.clear()
     provider.calls.clear()
     experiment.run_valid(provider, -1, None)
@@ -187,6 +223,13 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
     stages.clear()
     experiment.run_test(provider, -1, None)
     assert stages == [("encoder", 16, 4, None), ("predictor", 8, 2, 10)]
+    assert provider.calls == [
+        (list(range(16)), False),
+        (list(range(16, 20)), True),
+        (list(range(16)), True),
+        (list(range(16, 20)), True),
+        (list(range(20, 30)), True),
+    ]
     assert len(list((tmp_path / "embeddings").rglob("embeddings.pkl"))) == 2
     _identity, key = cache_identity(data, {"train": [1, 2]}, config["encoder"], 42, "inner")
     _, changed = cache_identity(data, {"train": [2, 1]}, config["encoder"], 42, "inner")
@@ -195,3 +238,14 @@ def test_pipeline_reuse_order_supervision_and_fresh_outer_encoder(tmp_path):
         data, {"train": [1, 2]}, {**config["encoder"], "epochs": 7}, 42, "inner"
     )
     assert key != changed
+
+    # GSPN-GPT-FIXED: A mismatched cache is rejected without accessing or retraining any partition.
+    corrupted = copy.deepcopy(saved)
+    corrupted["identity"]["seed"] += 1
+    atomic_dill_save(corrupted, str(cache))
+    stages.clear()
+    provider.calls.clear()
+    with pytest.raises(ValueError, match="Embedding cache provenance does not match"):
+        experiment.run_valid(provider, -1, None)
+    assert stages == []
+    assert provider.calls == []

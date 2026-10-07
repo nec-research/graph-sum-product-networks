@@ -299,12 +299,8 @@ class GSPNCategoricalEmission(GSPNEmission):
             labels = torch.where(available, x.reshape(-1), torch.zeros_like(x.reshape(-1)))
         if torch.any(available & ~self.valid_values(labels)):
             raise ValueError("Observed categorical labels must be valid integer category IDs")
-        probabilities = params.probabilities.unsqueeze(0).expand(labels.shape[0], -1, -1)
-        components = (
-            probabilities.gather(2, labels.long()[:, None, None].expand(-1, self.num_components, 1))
-            .squeeze(2)
-            .log()
-        )
+        # GSPN-GPT-FIXED: Select category probabilities directly without broadcast/gather plumbing.
+        components = params.probabilities[:, labels.long()].T.log()
         return torch.where(available[:, None], components, torch.zeros_like(components))
 
     def predictive_mean(self, params, *, weights):
@@ -721,13 +717,15 @@ class GSPN(ModelInterface):
             emission.initialize_from_centers(centers, max_variance)
         self.initialized.fill_(True)
 
-    def _infer_layer(self, evidence, previous_posterior, layer_index, previous_parameters):
+    # GSPN-GPT-FIXED: Completed layer results are the only source of posterior/parameter history.
+    def _infer_layer(self, evidence, layer_index, previous_layers):
         emission = self.emissions[layer_index]
+        previous_posterior = previous_layers[-1].posterior if previous_layers else None
         prior = self.transitions[layer_index](
             previous_posterior, edge_index=evidence.edge_index, num_nodes=evidence.x.shape[0]
         )
         params = (
-            emission.combine_shortcut_parameters(previous_parameters)
+            emission.combine_shortcut_parameters([layer.parameters for layer in previous_layers])
             if self.use_shortcut and layer_index == self.num_layers - 1 and layer_index > 0
             else emission.distribution_parameters()
         )
@@ -737,14 +735,11 @@ class GSPN(ModelInterface):
         log_prob, posterior = infer_mixture(components, prior)
         return LayerResult(prior, params, components, log_prob, posterior)
 
+    # GSPN-GPT-FIXED: Keep one layer history instead of parallel parameter/posterior bookkeeping.
     def _infer_nodes(self, evidence):
-        layers, parameters = [], []
-        previous = None
+        layers = []
         for index in range(self.num_layers):
-            result = self._infer_layer(evidence, previous, index, parameters)
-            layers.append(result)
-            parameters.append(result.parameters)
-            previous = result.posterior
+            layers.append(self._infer_layer(evidence, index, layers))
         return tuple(layers)
 
     def _run_node_inference(self, data):
