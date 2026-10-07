@@ -107,3 +107,43 @@ uv run pytest
 ```
 
 Tests cover analytic likelihoods, masking and input preservation, posterior imputation, shortcuts, gradients, initialization, configuration resolution, exact split conversion, cache invalidation/order, and test-blind pipeline execution. Custom experiments and providers are expected static-audit warnings; their partition and lifecycle behavior is exercised by integration tests.
+
+<!-- GSPN-GPT-FIXED: Document the opt-in internal refactor and its explicit equivalence boundary. -->
+## Refactored models (opt-in)
+
+`model_refactored.GSPN` and `model_refactored.SupGSPN` provide a separate implementation with named internal results. The original models and experiment YAMLs remain the comparison references. Select the new model path explicitly to try the refactor; existing built-in emission, convolution, and probabilistic-readout paths are translated at construction.
+
+```python
+# GSPN-GPT-FIXED: Transfer identical parameters before comparing model outputs.
+from model import GSPN as ReferenceGSPN
+from model_refactored import GSPN
+
+config = {
+    "num_layers": 2,
+    "num_mixtures": 3,
+    "emission_class": "model.GSPNGaussianEmission",
+    "avg_parameters_across_layers": False,
+}
+reference_model = ReferenceGSPN((2, 0), 2, config)
+model = GSPN((2, 0), 2, config)
+model.load_reference_state_dict(reference_model.state_dict())
+
+# batch is a PyG graph batch with two input features per node.
+predictions, embeddings, extras = model(batch)  # Existing ten extras, unchanged.
+result = model.infer(batch)                    # Named InferenceResult.
+node_posteriors = result.node_posteriors        # [nodes, layers, components].
+final_posterior = result.layers[-1].posterior
+embeddings_only = model.encode(batch)          # Skips readout/imputation/diagnostics.
+```
+
+`infer(batch, include_imputation=False, include_diagnostics=False)` omits the corresponding optional computations. Graph heads can predict without `batch.y`; their graph likelihood is `None` when targets are absent. All inference paths retain gradients. Gaussian initialization can be requested with `initialize_from_evidence(x, observed_mask)`; it also runs automatically on the first training batch when enabled, and never during evaluation. Throughout the new internals, `observed_mask=True` means observed.
+
+The new model always ensures **exactly one self-loop per node**, removing existing self-loop duplicates while retaining non-self edges and their multiplicity. Remove the `add_self_loops` key entirely: either value is rejected because there is no longer an optional second insertion. This is the only intentional change to the reference mathematics. Direct equivalence holds for loop-free input graphs with the reference model's optional insertion disabled; duplicate-loop cases are compared with an explicitly normalized single-loop reference. Isolated nodes continue receiving their own message.
+
+`load_reference_state_dict()` translates all parameters and the initialization buffer, validating keys and shapes before changing state. Construct both models with matching architectural settings and use the same dtype/device for numerical comparisons. Custom emissions subclass the new `GSPNEmission` and implement its component-density, predictive-mean, shortcut, parameter, and value-validity methods; custom transitions subclass the new `GSPNBaseConv`, and custom heads subclass `GraphHead`. Constructor contracts are `(dim_observable, num_components)` via `from_dimensions(...)`, `(num_components, use_prior)`, and `(dim_target, config)`, respectively. Custom parameter-name translations can override `reference_state_mapping()`.
+
+```sh
+uv run pytest tests/test_model_refactor.py
+```
+
+These comparisons cover every external output, gradients, optimizer updates, initialization, optional computation paths, and tiny CPU training-engine runs. Float64 comparisons use `rtol=1e-8, atol=1e-10`; float32 comparisons use `rtol=1e-5, atol=1e-6`. Failures report the maximum finite absolute difference. Bitwise identity is not required.

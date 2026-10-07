@@ -21,8 +21,9 @@ analysis = ["matplotlib", "seaborn", "jupyterlab", "rdkit", "cairosvg", "svglib"
 [project.scripts]
 gspn-convert-splits = "migration:main"
 
+# GSPN-GPT-FIXED: Package the opt-in refactor alongside the unchanged reference classes.
 [tool.setuptools]
-py-modules = ["model", "sup_model", "dataset", "provider", "transform", "readout", "metric", "optimizer", "baselines", "baseline_mask", "pipeline", "migration", "notebook_utils", "unsupervised_embedding_generation", "unsupervised_embedding_classification", "supervised_embedding_classification", "weakly_supervised_task"]
+py-modules = ["model", "model_refactored", "sup_model", "dataset", "provider", "transform", "readout", "metric", "optimizer", "baselines", "baseline_mask", "pipeline", "migration", "notebook_utils", "unsupervised_embedding_generation", "unsupervised_embedding_classification", "supervised_embedding_classification", "weakly_supervised_task"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.9"]
