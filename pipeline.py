@@ -1,0 +1,342 @@
+# One MLWiz experiment owns both stages and keeps outer test blind.
+import hashlib
+import importlib.metadata
+import json
+import math
+import time
+from pathlib import Path
+
+import torch
+from mlwiz.experiment import Experiment
+from mlwiz.static import LOSS, SCORE
+from mlwiz.util import atomic_dill_save, dill_load
+from torch_geometric.loader import DataLoader
+
+from migration import sha256
+
+
+def code_fingerprint():
+    """Hash top-level Python modules to invalidate embeddings after implementation changes."""
+    files = sorted(Path(__file__).parent.glob("*.py"))
+    return hashlib.sha256("".join(p.name + sha256(p) for p in files).encode()).hexdigest()
+
+
+def cache_identity(dataset, indices, config, seed, mode):
+    """Return encoder/data provenance and a hash including exact partition order."""
+    path = getattr(dataset, "dataset_filepath", None)
+    dataset_identity = {
+        "class": type(dataset).__module__ + "." + type(dataset).__name__,
+        "size": len(dataset),
+        "file": str(path),
+        "sha256": sha256(path) if path is not None else None,
+    }
+    identity = {
+        "dataset": dataset_identity,
+        "indices": indices,
+        "encoder": config,
+        "seed": seed,
+        "mode": mode,
+        "code": code_fingerprint(),
+        "versions": {
+            p: importlib.metadata.version(p) for p in ("mlwiz", "torch", "torch-geometric")
+        },
+        "transforms": {
+            "train": _transform_spec(dataset, "transform_train"),
+            "eval": _transform_spec(dataset, "transform_eval"),
+        },
+    }
+    return identity, hashlib.sha256(
+        json.dumps(identity, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+def _transform_spec(dataset, name):
+    """Serialize transform settings for embedding cache invalidation."""
+    from dataset import transform_identity
+
+    return transform_identity(getattr(dataset, name, None))
+
+
+def extract_embeddings(model, loader, device, should_terminate=None, deadline=None):
+    """Extract node embeddings in loader order, retaining graph IDs and targets on CPU."""
+    result = []
+    model.eval()
+    with torch.no_grad():
+        for graphs, targets in loader:
+            check_stop(should_terminate, deadline)
+            graphs = graphs.to(device)
+            embeddings = model(graphs)[1]
+            if embeddings is None or embeddings.shape[0] != graphs.num_nodes:
+                raise ValueError("Encoder must return one embedding per node")
+            individual = graphs.to_data_list()
+            for i, graph in enumerate(individual):
+                graph.x = embeddings[graphs.ptr[i] : graphs.ptr[i + 1]].detach().cpu()
+                graph = graph.cpu()
+                result.append((graph, targets[i].detach().cpu()))
+    return result
+
+
+def check_stop(should_terminate, deadline):
+    """Enforce cancellation and the shared deadline before continuing a pipeline stage."""
+    if should_terminate is not None and should_terminate():
+        from mlwiz.experiment.experiment import ExperimentTerminated
+
+        raise ExperimentTerminated("Embedding pipeline terminated")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("Embedding pipeline exceeded its total training timeout")
+
+
+class EmbeddingPipeline(Experiment):
+    """Train an encoder and predictor with separate inner-selection and outer-assessment caches."""
+
+    def _stage_config(self, key):
+        """Merge shared and stage settings, then enforce the experiment seed and checkpoints."""
+        shared = {
+            name: value
+            for name, value in self.model_config.items()
+            if name not in ("encoder", "predictor", key)
+        }
+        return {**shared, **dict(self.model_config[key]), "seed": self.exp_seed, "checkpoint": True}
+
+    def _train(
+        self,
+        config,
+        name,
+        dims,
+        target_dim,
+        train,
+        validation,
+        test,
+        logger,
+        deadline,
+        progress_callback,
+        should_terminate,
+    ):
+        """Train one stage with the remaining shared time budget and forwarded callbacks."""
+        check_stop(should_terminate, deadline)
+        stage = Experiment(config, str(Path(self.exp_path) / name), self.exp_seed)
+        model = stage.create_model(dims, target_dim, stage.model_config)
+        engine = stage.create_engine(stage.model_config, model)
+        remaining = -1 if deadline is None else max(1, math.ceil(deadline - time.monotonic()))
+        metrics = engine.train(
+            train_loader=train,
+            validation_loader=validation,
+            test_loader=test,
+            max_epochs=config["epochs"],
+            logger=logger,
+            training_timeout_seconds=remaining,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+        )
+        check_stop(should_terminate, deadline)
+        return model, metrics
+
+    def _partitions(self, provider, final):
+        """Return ordered inner partitions for selection or outer partitions for assessment."""
+        splitter = provider._get_splitter()
+        if final:
+            fold = splitter.outer_folds[provider.outer_k]
+            return {
+                "train": list(fold.train_idxs),
+                "validation": list(fold.val_idxs),
+                "test": list(fold.test_idxs),
+            }
+        fold = splitter.inner_folds[provider.outer_k][provider.inner_k]
+        return {"train": list(fold.train_idxs), "validation": list(fold.val_idxs)}
+
+    def _load_or_create_embeddings(
+        self,
+        dataset_getter,
+        dataset,
+        partitions,
+        encoder_config,
+        final,
+        logger,
+        deadline,
+        progress_callback,
+        should_terminate,
+    ):
+        """Reuse matching embeddings or train a partition-specific encoder and extract them."""
+        identity, digest = cache_identity(
+            dataset, partitions, encoder_config, self.exp_seed, "outer" if final else "inner"
+        )
+        cache = (
+            Path(self.model_config.get("embeddings_folder", "EMBEDDINGS_MLWIZ"))
+            / digest
+            / "embeddings.pkl"
+        )
+        check_stop(should_terminate, deadline)
+        if cache.exists():
+            saved = dill_load(str(cache))
+            if saved["identity"] != identity:
+                raise ValueError("Embedding cache provenance does not match")
+            embeddings = saved["embeddings"]
+        else:
+            # Entire training fold is unlabeled encoder input, independent of supervision fraction.
+            train = dataset_getter._get_loader(
+                partitions["train"],
+                is_eval=False,
+                batch_size=encoder_config["batch_size"],
+                shuffle=encoder_config.get("shuffle", True),
+            )
+            validation = dataset_getter._get_loader(
+                partitions["validation"],
+                is_eval=True,
+                batch_size=encoder_config["batch_size"],
+                shuffle=False,
+            )
+            model, _ = self._train(
+                config=encoder_config,
+                name="encoder",
+                dims=dataset.dim_input_features,
+                target_dim=dataset.dim_target,
+                train=train,
+                validation=validation,
+                test=None,
+                logger=logger,
+                deadline=deadline,
+                progress_callback=progress_callback,
+                should_terminate=should_terminate,
+            )
+            embeddings = {}
+            for name, indices in partitions.items():
+                loader = dataset_getter._get_loader(
+                    indices, is_eval=True, batch_size=encoder_config["batch_size"], shuffle=False
+                )
+                embeddings[name] = extract_embeddings(
+                    model,
+                    loader,
+                    encoder_config["device"],
+                    should_terminate=should_terminate,
+                    deadline=deadline,
+                )
+                if len(embeddings[name]) != len(indices):
+                    raise ValueError("Embedding count does not match partition indices")
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            atomic_dill_save(
+                {
+                    "identity": identity,
+                    "embeddings": embeddings,
+                    "encoder_state": {k: v.detach().cpu() for k, v in model.state_dict().items()},
+                },
+                str(cache),
+            )
+        return embeddings
+
+    def _predictor_loaders(self, embeddings, config, fraction):
+        """Restrict training/validation supervision while retaining every test sample."""
+        loaders = {}
+        for name, samples in embeddings.items():
+            selected = samples if name == "test" else samples[: math.floor(len(samples) * fraction)]
+            if not selected:
+                raise ValueError(f"Supervision fraction leaves an empty {name} partition")
+            loaders[name] = DataLoader(
+                selected,
+                batch_size=config["batch_size"],
+                shuffle=name == "train" and config.get("shuffle", True),
+                num_workers=0,
+            )
+        return loaders
+
+    def _run_pipeline(
+        self,
+        dataset_getter,
+        training_timeout_seconds,
+        logger,
+        progress_callback=None,
+        should_terminate=None,
+        final=False,
+        ddp_rank=None,
+        ddp_world_size=1,
+    ):
+        """Obtain fold-specific embeddings, train the predictor, and package MLWiz metrics."""
+        if ddp_world_size != 1:
+            raise ValueError(
+                "The embedding pipeline supports one device per run; parallelize folds/configurations with MLWiz"
+            )
+        deadline = (
+            None if training_timeout_seconds < 0 else time.monotonic() + training_timeout_seconds
+        )
+        encoder_config = self._stage_config("encoder")
+        partitions = self._partitions(dataset_getter, final)
+        dataset = dataset_getter._get_dataset()
+        embeddings = self._load_or_create_embeddings(
+            dataset_getter=dataset_getter,
+            dataset=dataset,
+            partitions=partitions,
+            encoder_config=encoder_config,
+            final=final,
+            logger=logger,
+            deadline=deadline,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+        )
+        fraction = self.model_config.get("weak_supervision_percentage", 1.0)
+        if not 0 < fraction <= 1:
+            raise ValueError("weak_supervision_percentage must be in (0, 1]")
+        config = self._stage_config("predictor")
+        loaders = self._predictor_loaders(embeddings, config, fraction)
+        dims = (embeddings["train"][0][0].x.shape[1], 0)
+        _, metrics = self._train(
+            config=config,
+            name="predictor",
+            dims=dims,
+            target_dim=dataset.dim_target,
+            train=loaders["train"],
+            validation=loaders["validation"],
+            test=loaders.get("test"),
+            logger=logger,
+            deadline=deadline,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+        )
+        results = [{LOSS: metrics[i], SCORE: metrics[i + 1]} for i in range(0, 6, 2)]
+        return tuple(results if final else results[:2])
+
+    def _run_valid_impl(
+        self,
+        dataset_getter,
+        training_timeout_seconds,
+        logger,
+        progress_callback=None,
+        should_terminate=None,
+        ddp_rank=None,
+        ddp_world_size=1,
+    ):
+        """Run inner-fold model selection without requesting outer-test data."""
+        return self._run_pipeline(
+            dataset_getter=dataset_getter,
+            training_timeout_seconds=training_timeout_seconds,
+            logger=logger,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+            final=False,
+            ddp_rank=ddp_rank,
+            ddp_world_size=ddp_world_size,
+        )
+
+    def _run_test_impl(
+        self,
+        dataset_getter,
+        training_timeout_seconds,
+        logger,
+        progress_callback=None,
+        should_terminate=None,
+        ddp_rank=None,
+        ddp_world_size=1,
+    ):
+        """Run outer-fold assessment with the complete test partition."""
+        return self._run_pipeline(
+            dataset_getter=dataset_getter,
+            training_timeout_seconds=training_timeout_seconds,
+            logger=logger,
+            progress_callback=progress_callback,
+            should_terminate=should_terminate,
+            final=True,
+            ddp_rank=ddp_rank,
+            ddp_world_size=ddp_world_size,
+        )
+
+
+class EmbeddingTask(Experiment):
+    """Optional encoder-only experiment with honest MLWiz validation and assessment."""

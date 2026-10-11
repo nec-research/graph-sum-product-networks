@@ -149,7 +149,8 @@ from typing import Tuple, Optional, List
 
 import torch
 from ogb.graphproppred.mol_encoder import AtomEncoder
-from pydgn.model.interface import ModelInterface
+from mlwiz.model.interface import ModelInterface
+from model import graph_dimensions
 from torch import Tensor
 from torch.nn import Sequential, Linear, BatchNorm1d, ReLU, PReLU
 from torch.nn.functional import dropout
@@ -160,8 +161,10 @@ from torch_geometric.nn.inits import reset, uniform
 
 
 class GIN(ModelInterface):
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         self.config = config
         self.dropout = config['dropout']
@@ -216,7 +219,7 @@ class GIN(ModelInterface):
         for layer in range(self.num_layers):
             if layer == 0:
                 x = self.first_h(x)
-                out += dropout(self.pooling(self.linears[layer](x), batch), p=self.dropout)
+                out += dropout(self.pooling(self.linears[layer](x), batch), p=self.dropout, training=self.training)
             else:
                 # Layer l ("convolution" layer)
                 x = self.convs[layer-1](x, edge_index)
@@ -229,8 +232,10 @@ class GAE_Adj(ModelInterface):
     """
     Original GAE that reconstructs the adjacency matrix to produce latent node representations
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         self.config = config
         self.num_layers = config['num_layers']
@@ -306,8 +311,10 @@ class DGI(ModelInterface):
     """
     Original DGI. Code taken and adapted from PyG
     """
-    def __init__(self, dim_node_features, dim_edge_features, dim_target, readout_class, config):
-        super().__init__(dim_node_features, dim_edge_features, dim_target, readout_class, config)
+    def __init__(self, dim_input_features, dim_target, config):
+        super().__init__(dim_input_features, dim_target, config)
+        dim_node_features, dim_edge_features = graph_dimensions(dim_input_features)
+        self.dim_node_features, self.dim_edge_features = dim_node_features, dim_edge_features
 
         self.config = config
         self.num_layers = config['num_layers']

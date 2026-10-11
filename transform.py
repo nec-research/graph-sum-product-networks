@@ -145,15 +145,32 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
+
+# Apply graph transforms to MLWiz tuple samples without mutating caches.
+import hashlib
+from functools import wraps
+
+
+def graph_transform(call):
+    @wraps(call)
+    def wrapped(self, sample):
+        paired = isinstance(sample, tuple)
+        graph = sample[0].clone() if paired else sample.clone()
+        result = call(self, graph)
+        return (result, sample[1]) if paired else result
+
+    return wrapped
+
+
 import torch
 from torch.distributions import Gamma
 from torch_geometric.utils import negative_sampling
 
 
 class NegativeSampling:
-    """
-    Randomly masks a percentage of nodes
-    """
+    """Sample negative edges for graph reconstruction."""
+
+    @graph_transform
     def __call__(self, data):
         neg_edge_index = negative_sampling(data.edge_index)
         data.neg_edge_index = neg_edge_index
@@ -161,81 +178,110 @@ class NegativeSampling:
 
 
 class DGICorruption:
-    """
-    Randomly shuffles node features
-    """
+    """Deterministically shuffle node features for graph corruption."""
+
+    @graph_transform
     def __call__(self, data):
-        data.x_corrupted = data.x[torch.randperm(data.x.size(0))]
+        # Deterministic corruption permits stable held-out evaluation.
+        digest = hashlib.sha256(data.x.detach().cpu().numpy().tobytes()).digest()
+        generator = torch.Generator(device=data.x.device).manual_seed(
+            int.from_bytes(digest[:8], "little")
+        )
+        data.x_corrupted = data.x[
+            torch.randperm(data.x.size(0), generator=generator, device=data.x.device)
+        ]
         return data
 
 
 class RandomNodeMask:
-    """
-    Randomly masks a percentage of nodes
-    """
+    """Mask nodes at a fixed rate; data.mask=True marks observed nodes."""
+
     def __init__(self, percentage_to_mask):
         self.percentage_to_mask = percentage_to_mask
 
+    @graph_transform
     def __call__(self, data):
         assert len(data.x.shape) == 2
 
         num_nodes = data.x.shape[0]
-        # num_features = data.x.shape[1]
-        mask = (torch.rand(num_nodes) >= self.percentage_to_mask)
+        mask = torch.rand(num_nodes) >= self.percentage_to_mask
         data.mask = mask
 
         return data
 
 
 class RandomNodeFeaturesMask:
-    """
-    Randomly masks a percentage of node features
-    """
+    """Mask features at a fixed rate; data.mask=True marks observed features."""
+
     def __init__(self, percentage_to_mask):
         self.percentage_to_mask = percentage_to_mask
 
+    @graph_transform
     def __call__(self, data):
         assert len(data.x.shape) == 2
 
-        # num_features = data.x.shape[1]
-        mask = (torch.rand(data.x.shape) >= self.percentage_to_mask)
+        mask = torch.rand(data.x.shape) >= self.percentage_to_mask
         data.mask = mask
 
         return data
 
-class GammaRandomNodeFeaturesMask:
-    """
-    Randomly sample the percentage of features to mask for each node
-    """
-    def __init__(self, alpha, beta):
-        self.gamma = Gamma(concentration=alpha, rate=1./beta)
 
+class GammaRandomNodeFeaturesMask:
+    """Sample a Gamma-derived missing-feature fraction independently for each node."""
+
+    def __init__(self, alpha, beta):
+        self.gamma = Gamma(concentration=alpha, rate=1.0 / beta)
+
+    @graph_transform
     def __call__(self, data):
         assert len(data.x.shape) == 2
         num_samples = data.x.shape[0]
         num_features = data.x.shape[1]
 
-        perc = torch.tensor([torch.clamp(self.gamma.sample(), max=10).item()/10. for _ in range(num_samples)])
-        num_features_to_mask_per_node = torch.floor(perc*num_features).int()
-
-        # Ensure at least one feature is kept
-        # num_features_to_mask_per_node[num_features_to_mask_per_node == num_features] = num_features-1
+        perc = torch.tensor(
+            [torch.clamp(self.gamma.sample(), max=10).item() / 10.0 for _ in range(num_samples)]
+        )
+        num_features_to_mask_per_node = torch.floor(perc * num_features).int()
 
         random_indices = torch.argsort(torch.rand(num_samples, num_features))
 
-        # mask is true if element needs to be retained
+        # True means observed; False means missing.
         mask = torch.ones_like(data.x).bool()
 
-        # mask the first k random indices for each node, where k is a number specifically sampled for each node
+        # Each node masks its own sampled number of randomly chosen features.
         for i in range(num_samples):
-            mask[i, random_indices[i, :num_features_to_mask_per_node[i]]] = False
+            mask[i, random_indices[i, : num_features_to_mask_per_node[i]]] = False
 
         data.mask = mask
         data.perc_masked_features = perc
         return data
 
-class ContinuousAttributesTUDatasetChemical:
 
+class ContinuousAttributesTUDatasetChemical:
+    @graph_transform
     def __call__(self, data):
-        data.x = data.x[:,:6]
+        data.x = data.x[:, :6]
         return data
+
+
+# Replace the old framework's fixed, stateless Degree transform.
+class Degree:
+    @graph_transform
+    def __call__(self, data):
+        from torch_geometric.utils import degree
+
+        data.x = degree(data.edge_index[1], num_nodes=data.num_nodes).reshape(-1, 1)
+        return data
+
+
+# MLWiz accepts a single transform specification; compose graph tuples here.
+class Compose:
+    def __init__(self, transforms):
+        from mlwiz.util import s2c
+
+        self.transforms = [s2c(spec["class_name"])(**spec.get("args", {})) for spec in transforms]
+
+    def __call__(self, sample):
+        for transform in self.transforms:
+            sample = transform(sample)
+        return sample

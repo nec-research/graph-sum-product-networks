@@ -145,8 +145,8 @@ arrangements between the parties relating hereto.
 
 THIS HEADER MAY NOT BE EXTRACTED OR MODIFIED IN ANY WAY.
 """
-from pydgn.model.interface import ModelInterface
-from pydgn.training.event.handler import EventHandler
+from mlwiz.model.interface import ModelInterface
+from mlwiz.training.event.handler import EventHandler
 
 
 class FakeOptimizer(EventHandler):
